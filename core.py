@@ -262,25 +262,28 @@ def _simulate_grid(
         max_snapshot = max_price
         min_snapshot = min_price
 
-        # 이익 회수 이벤트 (백테스트2 전용): 매수/매도 판단보다 먼저, 매일 체크한다.
-        # 기준가(profit_base_price) 대비 profit_gap_percent% 이상 오르면 발동.
+        # 이익 회수 이벤트 (백테스트2 전용): 매수/매도 판단(이하 sell/buy 로직)과는 완전히
+        # 독립적으로, 매일 먼저 체크한다. 기준가(profit_base_price) 대비 profit_gap_percent%
+        # 이상 오르면 발동 — 이때 "현금에서 떼어내는" 게 아니라, 필요한 만큼 주식을 직접
+        # 매도해서 그 대금을 적립금으로 옮긴다 (일반 매도 로직의 max/횟수와는 무관).
         if profit_sweep and price >= profit_base_price * (1 + profit_gap_ratio):
             base_snapshot = profit_base_price
             profit = shares * (price - base_snapshot)
-            if profit > 0:
-                # 평가차익 중 회수율만큼을 현금에서 떼어 적립금으로 옮긴다.
-                # 현금이 모자라면(차익이 대부분 미실현 상태라 현금화가 안 됐을 수 있음)
-                # 있는 현금 범위 내에서만 회수한다.
-                recovered = min(profit * profit_recover_ratio, cash)
-                if recovered > 0:
-                    cash -= recovered
+            if profit > 0 and shares > 0:
+                # 회수해야 할 금액(평가차익 x 회수율)만큼을 현재가로 환산해 몇 주를 팔지 정한다.
+                # 주식 수는 정수 단위라 목표 금액을 소수 없이 채우지 못할 수 있어 내림 처리한다.
+                target_value = profit * profit_recover_ratio
+                recover_shares = min(shares, int(target_value // price))
+                if recover_shares > 0:
+                    recovered = recover_shares * price
+                    shares -= recover_shares
                     reserve += recovered
                     recover_count += 1
                     if record_log:
                         recover_log.append({
                             "날짜": date, "구분": "이익회수", "기준가": base_snapshot,
-                            "가격": price, "평가차익": profit, "회수액": recovered,
-                            "적립금잔고": reserve, "현금잔고": cash,
+                            "가격": price, "평가차익": profit, "매도주식수": recover_shares,
+                            "회수액": recovered, "적립금잔고": reserve, "현금잔고": cash,
                             "보유주식수": shares, "주식평가금액": price * shares,
                         })
             # 회수 여부와 무관하게, 조건이 충족되면 기준가를 그 시점 주가로 갱신한다.
@@ -385,12 +388,15 @@ def grid_trade_strategy(
 
     이익 회수 (백테스트2, profit_gap_percent/profit_recover_percent를 둘 다 지정할 때만 동작)
     ----
+    - 매수/매도 로직과는 완전히 독립적으로 동작한다 (max/min, 매도·매수 횟수에 영향 없음).
     - 기준가(profit_base_price)는 max/min과 마찬가지로 첫날 종가로 시작한다.
     - 매일, 매수/매도 판단보다 먼저 확인한다: 주가가 기준가보다 profit_gap_percent% 이상
       오르면 이벤트 발동.
-    - 발동 시 평가차익 = 보유주식수 × (현재가 − 기준가). 이 중 profit_recover_percent%를
-      현금에서 떼어 "적립금"으로 옮긴다 (현금이 부족하면 있는 만큼만 회수). 적립금은 이후
-      매수 자금으로 쓰이지 않고, 최종 total 계산에는 그대로 합산된다.
+    - 발동 시 평가차익 = 보유주식수 × (현재가 − 기준가). 이 중 profit_recover_percent%에
+      해당하는 금액만큼 **주식을 직접 매도**해서(현재가 기준, 정수 주식수로 내림 처리) 그
+      대금을 "적립금"으로 옮긴다 — 기존 현금과는 무관하게, 필요한 만큼 주식을 팔아서
+      회수한다. 적립금은 이후 매수 자금으로 쓰이지 않고, 최종 total 계산에는 그대로
+      합산된다.
     - 발동하면(실제로 회수됐는지와 무관하게) 기준가를 그 시점 주가로 갱신한다.
 
     Parameters
@@ -419,7 +425,7 @@ def grid_trade_strategy(
         이익 회수 이벤트 트리거 등락폭 (%). 기준가 대비 이만큼 오르면 발동. 둘 다 지정해야
         이익 회수 기능이 켜진다 (지정 안 하면 기존과 완전히 동일하게 동작).
     profit_recover_percent : float, optional
-        이벤트 발동 시 평가차익 중 회수할 비율 (1~100).
+        이벤트 발동 시 평가차익 중 주식을 매도해 회수할 비율 (1~100).
 
     Returns
     -------
@@ -441,8 +447,8 @@ def grid_trade_strategy(
             # 이익 회수 기능을 켰을 때만 아래 두 키가 추가된다.
             "이익회수횟수": ...,
             "이익회수일지": [{"날짜":..., "구분":"이익회수", "기준가":..., "가격":...,
-                          "평가차익":..., "회수액":..., "적립금잔고":..., "현금잔고":...,
-                          "보유주식수":..., "주식평가금액":...}, ...],
+                          "평가차익":..., "매도주식수":..., "회수액":..., "적립금잔고":...,
+                          "현금잔고":..., "보유주식수":..., "주식평가금액":...}, ...],
         }
     """
     if df.empty:
