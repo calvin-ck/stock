@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>그리드 매매 백테스트 — 수익 확인</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --up: #d24343;
+    --down: #2a6fd6;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --border: #e3e5e8;
+    --text: #1f2328;
+    --muted: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 32px 16px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  .nav { margin-bottom: 16px; }
+  .nav a { color: var(--muted); text-decoration: none; font-size: 13px; }
+  .nav a:hover { text-decoration: underline; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--card);
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .form-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field .hint { font-weight: 400; color: var(--muted); }
+  form select, form input {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  form select { min-width: 180px; }
+  form input[type="number"] { width: 110px; }
+  form input[name="sell_gap"], form input[name="buy_gap"] { width: 150px; }
+  form button {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #1f2328;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    height: 41px;
+  }
+  form button:hover { background: #3b3f45; }
+  .checkbox-field { flex-direction: row; align-items: center; }
+  .checkbox-field label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--text); white-space: nowrap;
+  }
+  .checkbox-field input[type="checkbox"] { width: 16px; height: 16px; }
+
+  .empty {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .empty a { color: #2a6fd6; }
+
+  .error {
+    background: #fdecec;
+    color: var(--up);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 14px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 12px 0; }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .summary-grid + .summary-grid { margin-top: 10px; }
+  .stat { background: var(--bg); border-radius: 10px; padding: 12px 14px; }
+  .stat .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .stat .value { font-size: 18px; font-weight: 700; }
+  .stat .value.up { color: var(--up); }
+  .stat .value.down { color: var(--down); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  th:nth-child(2), td:nth-child(2) { text-align: center; }
+  th { color: var(--muted); font-weight: 600; }
+  td.sell { color: var(--up); font-weight: 600; }
+  td.buy { color: var(--down); font-weight: 600; }
+
+  .table-scroll { max-height: 480px; overflow-y: auto; }
+  canvas { max-height: 360px; }
+  .legend-line {
+    display: flex;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  .legend-line span { display: inline-flex; align-items: center; gap: 4px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.sell { background: var(--up); }
+  .dot.buy { background: var(--down); }
+  .option-badges { display: flex; gap: 8px; margin-bottom: 12px; }
+  .option-badges .badge {
+    font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    background: var(--bg); color: var(--muted); border: 1px solid var(--border);
+  }
+  .option-badges .badge.warn { color: #92400e; background: #fef3c7; border-color: #fde68a; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="nav">
+    <a href="/">&larr; 메인(조회) 페이지로</a>
+    <a href="/backtest2" style="margin-left: 16px;">🏦 백테스트2(이익 회수) →</a>
+    <a href="/heatmap" style="margin-left: 16px;">🔥 gap×수량 히트맵 →</a>
+    <a href="/heatmap2" style="margin-left: 16px;">🔥🏦 백테스트2 히트맵 →</a>
+  </div>
+  <h1>💰 그리드 매매 백테스트 — 수익 확인</h1>
+  <p class="sub">
+    메인 페이지에서 조회했던 종목의 로컬 CSV 데이터만 사용합니다 (네이버 재접속 없음).
+    등락폭(gap)과 매매 수량을 입력하면 백테스트 결과와 매매일지를 보여드립니다.
+  </p>
+
+  {% if files %}
+  <form method="get" action="/backtest" id="backtestForm">
+    <div class="form-row">
+      <div class="field">
+        <label for="group_select">종목 데이터</label>
+        <select id="group_select" required>
+          <option value="">선택하세요</option>
+          {% for g in groups %}
+          <option value="{{ g.code }}_{{ g.days }}">{{ g.code }} ({{ g.days }}일)</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="date_select">생성일자</label>
+        <select id="date_select" required disabled>
+          <option value="">종목을 먼저 선택하세요</option>
+        </select>
+      </div>
+      <input type="hidden" name="file" id="file" value="{{ selected_file }}">
+
+      <div class="field checkbox-field">
+        <label>
+          <input type="checkbox" name="sell_only" value="on" {% if sell_only %}checked{% endif %}>
+          매도만 (매수 안 함)
+        </label>
+      </div>
+      <div class="field checkbox-field">
+        <label>
+          <input type="checkbox" name="allow_negative_cash" value="on" {% if allow_negative_cash %}checked{% endif %}>
+          현금 마이너스 허용
+        </label>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="field">
+        <label for="init_shares">시작 보유 주식수</label>
+        <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
+      </div>
+      <div class="field">
+        <label for="sell_gap">매도 gap (%)</label>
+        <input type="number" name="sell_gap" id="sell_gap" step="0.1" min="0.1" value="{{ sell_gap }}" required>
+      </div>
+      <div class="field">
+        <label for="buy_gap">매수 gap (%) <span class="hint">비우면 매도gap과 동일</span></label>
+        <input type="number" name="buy_gap" id="buy_gap" step="0.1" min="0.1" value="{{ buy_gap }}" placeholder="매도gap과 동일">
+      </div>
+      <div class="field">
+        <label for="qty">매수/매도 수량</label>
+        <input type="number" name="qty" id="qty" min="1" value="{{ qty }}" required>
+      </div>
+      <button type="submit">계산</button>
+    </div>
+  </form>
+
+  <script>
+    // 종목(code_days) -> [{filename, created_display}, ...] 매핑
+    const CSV_GROUPS = {{ groups | tojson }};
+    const groupMap = {};
+    CSV_GROUPS.forEach(g => { groupMap[g.code + '_' + g.days] = g.items; });
+
+    const groupSelect = document.getElementById('group_select');
+    const dateSelect = document.getElementById('date_select');
+    const fileInput = document.getElementById('file');
+
+    function populateDateSelect(key, preselectFilename) {
+      dateSelect.innerHTML = '';
+      const items = groupMap[key] || [];
+      if (items.length === 0) {
+        dateSelect.disabled = true;
+        dateSelect.innerHTML = '<option value="">데이터 없음</option>';
+        return;
+      }
+      dateSelect.disabled = false;
+      items.forEach(item => {
+        const opt = document.createElement('option');
+        opt.value = item.filename;
+        opt.textContent = item.created_display;
+        if (item.filename === preselectFilename) opt.selected = true;
+        dateSelect.appendChild(opt);
+      });
+      fileInput.value = dateSelect.value;
+    }
+
+    groupSelect.addEventListener('change', () => populateDateSelect(groupSelect.value, null));
+    dateSelect.addEventListener('change', () => { fileInput.value = dateSelect.value; });
+
+    // 기존 선택값(재조회/폼 재제출 시) 복원
+    const preselected = "{{ selected_file }}";
+    if (preselected) {
+      const parts = preselected.match(/^(\d+)_(\d+)days_/);
+      if (parts) {
+        const key = parts[1] + '_' + parts[2];
+        groupSelect.value = key;
+        populateDateSelect(key, preselected);
+      }
+    }
+
+    document.getElementById('backtestForm').addEventListener('submit', (e) => {
+      if (!fileInput.value) {
+        e.preventDefault();
+        alert('종목과 생성일자를 모두 선택해주세요.');
+      }
+    });
+  </script>
+  {% else %}
+  <div class="empty">
+    저장된 데이터가 없습니다. <a href="/">메인 페이지</a>에서 종목을 먼저 조회해주세요.<br>
+    (조회한 데이터는 자동으로 로컬 CSV에 저장되어 여기서 재사용됩니다.)
+  </div>
+  {% endif %}
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {% if summary %}
+    <div class="card">
+      <h2>
+        {{ code }} — 매도gap {{ sell_gap }}% / 매수gap {{ "{:g}".format(effective_buy_gap) }}%
+        / 수량 {{ qty }}주 / 시작 {{ init_shares }}주
+        ({{ days }}일 데이터, {{ created_display }} 조회분)
+      </h2>
+      <div class="option-badges">
+        {% if sell_only %}<span class="badge">🔻 매도만 (매수 안 함)</span>{% endif %}
+        {% if allow_negative_cash %}<span class="badge warn">⚠️ 현금 마이너스 허용</span>{% endif %}
+      </div>
+      <div class="summary-grid">
+        <div class="stat">
+          <div class="label">시작 자산</div>
+          <div class="value">{{ "{:,.0f}".format(initial_asset) }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">최종 자산 (total)</div>
+          <div class="value">{{ "{:,.0f}".format(summary["total"]) }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">수익</div>
+          <div class="value {{ 'up' if profit >= 0 else 'down' }}">
+            {{ "{:+,.0f}".format(profit) }}
+          </div>
+        </div>
+        <div class="stat">
+          <div class="label">수익률</div>
+          <div class="value {{ 'up' if profit_pct >= 0 else 'down' }}">
+            {{ "{:+.2f}".format(profit_pct) }}%
+          </div>
+        </div>
+      </div>
+
+      <div class="summary-grid">
+        <div class="stat">
+          <div class="label">현금</div>
+          <div class="value">{{ "{:,.0f}".format(summary["현금"]) }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">주식 평가금액</div>
+          <div class="value">{{ "{:,.0f}".format(summary["주식_평가금액"]) }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">마지막 주가</div>
+          <div class="value">{{ "{:,.0f}".format(summary["주가"]) }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">보유 주식수</div>
+          <div class="value">{{ "{:,.0f}".format(summary["보유주식수"]) }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">매도 / 매수 횟수</div>
+          <div class="value">{{ summary["매도횟수"] }} / {{ summary["매수횟수"] }}</div>
+        </div>
+      </div>
+
+      <div class="summary-grid">
+        <div class="stat">
+          <div class="label">매매 안 했을 때 최종 자산</div>
+          <div class="value">{{ "{:,.0f}".format(hold_only_asset) }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">매매 전략 대비 (vs 단순보유)</div>
+          <div class="value {{ 'up' if vs_hold >= 0 else 'down' }}">
+            {{ "{:+,.0f}".format(vs_hold) }}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>주가 추이 및 매매 시점</h2>
+      <div class="legend-line">
+        <span><span class="dot sell"></span> 매도</span>
+        <span><span class="dot buy"></span> 매수</span>
+      </div>
+      <canvas id="tradeChart"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>매매일지 ({{ trade_log|length }}건)</h2>
+      {% if trade_log %}
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>날짜</th>
+              <th>구분</th>
+              <th>max</th>
+              <th>min</th>
+              <th>등락률</th>
+              <th>가격</th>
+              <th>수량</th>
+              <th>현금잔고</th>
+              <th>보유주식수</th>
+              <th>주식평가금액</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in trade_log %}
+            <tr>
+              <td>{{ row["날짜"] }}</td>
+              <td class="{{ 'sell' if row['구분'] == '매도' else 'buy' }}">{{ row["구분"] }}</td>
+              <td>{{ "{:,.0f}".format(row["max"]) }}</td>
+              <td>{{ "{:,.0f}".format(row["min"]) }}</td>
+              <td class="{{ 'sell' if row['구분'] == '매도' else 'buy' }}">{{ "{:+.2f}".format(row["등락률"]) }}%</td>
+              <td>{{ "{:,.0f}".format(row["가격"]) }}</td>
+              <td>{{ row["수량"] }}</td>
+              <td>{{ "{:,.0f}".format(row["현금잔고"]) }}</td>
+              <td>{{ row["보유주식수"] }}</td>
+              <td>{{ "{:,.0f}".format(row["주식평가금액"]) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p style="color: var(--muted); font-size: 14px;">이 조건에서는 매매가 발생하지 않았습니다.</p>
+      {% endif %}
+    </div>
+
+    <script>
+      const ctx = document.getElementById('tradeChart');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: {{ chart_labels | tojson }},
+          datasets: [
+            {
+              type: 'line',
+              label: '종가',
+              data: {{ chart_prices | tojson }},
+              borderColor: '#1f2328',
+              backgroundColor: 'rgba(31,35,40,0.05)',
+              borderWidth: 1.5,
+              tension: 0.2,
+              fill: true,
+              pointRadius: 0,
+              order: 3,
+            },
+            {
+              type: 'scatter',
+              label: '매도',
+              data: {{ chart_sell_points | tojson }},
+              backgroundColor: '#d24343',
+              borderColor: '#d24343',
+              pointStyle: 'triangle',
+              pointRotation: 180,
+              pointRadius: 7,
+              pointHoverRadius: 9,
+              showLine: false,
+              order: 1,
+            },
+            {
+              type: 'scatter',
+              label: '매수',
+              data: {{ chart_buy_points | tojson }},
+              backgroundColor: '#2a6fd6',
+              borderColor: '#2a6fd6',
+              pointStyle: 'triangle',
+              pointRotation: 0,
+              pointRadius: 7,
+              pointHoverRadius: 9,
+              showLine: false,
+              order: 2,
+            },
+          ]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'nearest', intersect: true },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: (items) => {
+                  if (!items.length) return '';
+                  const item = items[0];
+                  // scatter(매도/매수) 포인트는 raw가 {x, y} 객체라 실제 날짜(x)를 그대로 쓴다.
+                  // line(종가) 포인트는 raw가 숫자라, 기존처럼 labels[index]를 사용한다.
+                  if (item.raw && typeof item.raw === 'object' && 'x' in item.raw) {
+                    return item.raw.x;
+                  }
+                  return item.label;
+                },
+                label: (item) => {
+                  const y = item.parsed.y;
+                  return `${item.dataset.label}: ${y.toLocaleString()}`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { type: 'category' },
+            y: { ticks: { callback: (v) => v.toLocaleString() } }
+          }
+        }
+      });
+    </script>
+  {% endif %}
+</div>
+</body>
+</html>

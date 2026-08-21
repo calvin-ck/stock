@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>네이버 주식 시세 조회</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --up: #d24343;
+    --down: #2a6fd6;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --border: #e3e5e8;
+    --text: #1f2328;
+    --muted: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 32px 16px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  .nav { margin-bottom: 12px; }
+  .nav a { color: #2a6fd6; text-decoration: none; font-size: 13px; font-weight: 600; }
+  .nav a:hover { text-decoration: underline; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; }
+
+  form {
+    display: flex;
+    gap: 8px;
+    background: var(--card);
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  form input {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  form input[name="code"] { flex: 1; min-width: 140px; }
+  form input[name="days"] { width: 90px; }
+  form button {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #1f2328;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  form button:hover { background: #3b3f45; }
+
+  .source-url {
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin: -16px 0 24px 0;
+    word-break: break-all;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .source-url a { color: #2a6fd6; text-decoration: none; }
+  .source-url a:hover { text-decoration: underline; }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .card-header h2 { margin: 0; }
+  .btn-csv {
+    padding: 7px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #f0fdf4;
+    color: #166534;
+    font-size: 13px;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .btn-csv:hover { background: #dcfce7; }
+  .btn-toggle {
+    padding: 7px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #f5f6f8;
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn-toggle:hover { background: #e9eaed; }
+  .card-actions { display: flex; gap: 8px; align-items: center; }
+  .table-wrap.hidden { display: none; }
+
+  .error {
+    background: #fdecec;
+    color: var(--up);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 14px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 12px 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+
+  canvas { max-height: 320px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="nav">
+    <a href="/backtest">💰 그리드 매매 백테스트(수익 확인) 페이지 →</a>
+    <a href="/backtest2" style="margin-left: 16px;">🏦 백테스트2(이익 회수) →</a>
+    <a href="/heatmap" style="margin-left: 16px;">🔥 gap×수량 히트맵 →</a>
+    <a href="/heatmap2" style="margin-left: 16px;">🔥🏦 백테스트2 히트맵 →</a>
+  </div>
+  <h1>📈 네이버 주식 시세 조회</h1>
+  <p class="sub">종목 코드와 기간(오늘부터 며칠 전까지)을 입력하세요. 예: 삼성전자 005930, 카카오 035720</p>
+
+  <form method="get" action="/">
+    <input type="text" name="code" placeholder="종목 코드 (예: 005930)" value="{{ code }}" required>
+    <input type="number" name="days" min="1" placeholder="기간(일)" value="{{ days }}" required>
+    <button type="submit">조회</button>
+  </form>
+
+  {% if source_url %}
+    <div class="source-url">
+      데이터 조회 URL (1페이지): <a href="{{ source_url }}" target="_blank" rel="noopener">{{ source_url }}</a>
+    </div>
+  {% endif %}
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {% if table %}
+    <div class="card">
+      <h2>{{ name or code }}{% if name %} ({{ code }}){% endif %} — 최근 {{ days }}일 종가 추이</h2>
+      <canvas id="priceChart"></canvas>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>일별 시세 ({{ table|length }}건)</h2>
+        <div class="card-actions">
+          <button type="button" class="btn-toggle" id="toggleTableBtn" onclick="toggleTable()">테이블 숨기기</button>
+          <a class="btn-csv" href="{{ url_for('download_csv', code=code, days=days) }}">⬇ CSV로 저장</a>
+        </div>
+      </div>
+      <div class="table-wrap" id="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>날짜</th>
+              <th>시가</th>
+              <th>종가</th>
+              <th>전일비</th>
+              <th>고가</th>
+              <th>저가</th>
+              <th>거래량</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in table %}
+            <tr>
+              <td>{{ row["날짜"] }}</td>
+              <td>{{ "{:,.0f}".format(row["시가"]) }}</td>
+              <td>{{ "{:,.0f}".format(row["종가"]) }}</td>
+              <td>{{ "{:,.0f}".format(row["전일비"]) }}</td>
+              <td>{{ "{:,.0f}".format(row["고가"]) }}</td>
+              <td>{{ "{:,.0f}".format(row["저가"]) }}</td>
+              <td>{{ "{:,.0f}".format(row["거래량"]) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <script>
+      function toggleTable() {
+        const wrap = document.getElementById('tableWrap');
+        const btn = document.getElementById('toggleTableBtn');
+        const hidden = wrap.classList.toggle('hidden');
+        btn.textContent = hidden ? '테이블 보이기' : '테이블 숨기기';
+      }
+    </script>
+
+    <script>
+      const ctx = document.getElementById('priceChart');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: {{ chart_labels | tojson }},
+          datasets: [{
+            label: '종가',
+            data: {{ chart_prices | tojson }},
+            borderColor: '#d24343',
+            backgroundColor: 'rgba(210,67,67,0.08)',
+            tension: 0.25,
+            fill: true,
+            pointRadius: 2,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { ticks: { callback: (v) => v.toLocaleString() } }
+          }
+        }
+      });
+    </script>
+  {% endif %}
+</div>
+</body>
+</html>

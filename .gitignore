@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.claude/settings.local.json
+
+# 조회한 시세는 로컬 캐시라 커밋하지 않음 (폴더 구조만 유지)
+data/*.csv
+!data/.gitkeep
+
+# 옛 백업/아카이브
+bak/
+stock.tar.gz
