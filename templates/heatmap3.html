@@ -2,12 +2,13 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>그리드 매매 히트맵 — gap × 수량 수익률</title>
+<title>통합 히트맵 — 축 선택형</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
     --up: #d24343;
     --down: #2a6fd6;
+    --recover: #b8860b;
     --bg: #f5f6f8;
     --card: #ffffff;
     --border: #e3e5e8;
@@ -22,8 +23,8 @@
     margin: 0;
     padding: 32px 16px;
   }
-  .wrap { max-width: 1100px; margin: 0 auto; }
-  .nav { margin-bottom: 16px; display: flex; gap: 16px; }
+  .wrap { max-width: 1150px; margin: 0 auto; }
+  .nav { margin-bottom: 16px; display: flex; gap: 16px; flex-wrap: wrap; }
   .nav a { color: var(--muted); text-decoration: none; font-size: 13px; }
   .nav a:hover { text-decoration: underline; }
   h1 { font-size: 22px; margin-bottom: 4px; }
@@ -43,6 +44,7 @@
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-size: 12px; color: var(--muted); }
   .field .hint { font-weight: 400; color: var(--muted); }
+  .hint { font-weight: 400; color: var(--muted); font-size: 11px; }
   form select, form input {
     padding: 10px 12px;
     border: 1px solid var(--border);
@@ -50,7 +52,7 @@
     font-size: 14px;
   }
   form select { min-width: 180px; }
-  form input[type="number"] { width: 110px; }
+  form input[type="number"] { width: 100px; }
   form button {
     padding: 10px 18px;
     border: none;
@@ -67,6 +69,25 @@
     display: flex; align-items: center; gap: 6px;
     font-size: 13px; color: var(--text); white-space: nowrap;
   }
+
+  .axis-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    padding: 10px 12px;
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+  }
+  .axis-row .group-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+    align-self: center;
+    margin-right: 4px;
+    white-space: nowrap;
+  }
+  .feature-block { display: flex; gap: 8px; align-items: flex-end; }
 
   .empty {
     background: var(--card);
@@ -99,7 +120,7 @@
 
   .callout-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 12px;
   }
   .callout {
@@ -136,7 +157,6 @@
   .heatmap-col { display: flex; flex-direction: column; gap: 6px; }
   .heatmap-grid {
     display: grid;
-    grid-template-columns: repeat(50, 12px);
     grid-auto-rows: 12px;
     gap: 1px;
   }
@@ -223,20 +243,21 @@
   <div class="nav">
     <a href="/">&larr; 메인(조회) 페이지</a>
     <a href="/backtest">백테스트(수익 확인·이익 회수) 페이지</a>
-    <a href="/heatmap2">🏦 이익회수 히트맵 →</a>
-    <a href="/heatmap3">🧭 통합 히트맵(축 선택) →</a>
+    <a href="/heatmap">🔥 gap × 수량 히트맵</a>
+    <a href="/heatmap2">🏦 이익회수 히트맵</a>
   </div>
-  <h1>🔥 gap × 수량 히트맵</h1>
+  <h1>🧭 통합 히트맵 — 축 선택형</h1>
   <p class="sub">
-    gap(%)과 매매 수량(%, 시작 보유 주식수 대비)의 범위를 지정하면 그 조합별(1% 단위) 수익률을
-    한번에 계산합니다. 수익률(%)과 최종자산은 자본금(비우면 시작 자산 = 시작 보유 주식수 ×
-    첫날 종가)을 기준으로 계산합니다. 저장된 로컬 CSV만 사용하므로 네이버에 다시 접속하지
-    않습니다.
-    각 칸을 클릭하면 그 gap/수량 조건 그대로 백테스트 페이지로 이동해 매매일지를 볼 수 있습니다.
+    주가gap · 매매수량 · 이익gap · 이익회수율 4개 중 2개를 골라 X축/Y축으로 스윕합니다.
+    축으로 고르지 않은 나머지 두 값은 아래에서 <b>고정값</b>으로 입력합니다. 이익 회수
+    로직은 축 선택과 무관하게 <b>항상 켜진 채로</b> 계산되므로, 이익gap·이익회수율을 축으로
+    고르지 않아도 그 고정값이 계산에 반영됩니다. 저장된 로컬 CSV만 사용하므로 네이버에
+    다시 접속하지 않습니다. 각 칸/카드를 클릭하면 그 조건 그대로 백테스트 페이지로
+    이동합니다.
   </p>
 
   {% if files %}
-  <form method="get" action="/heatmap" id="heatmapForm">
+  <form method="get" action="/heatmap3" id="heatmapForm">
     <div class="form-row">
       <div class="field">
         <label for="group_select">종목 데이터</label>
@@ -277,25 +298,6 @@
 
     <div class="form-row">
       <div class="field">
-        <label for="gap_min">gap 하한(%)</label>
-        <input type="number" name="gap_min" id="gap_min" min="1" value="{{ gap_min }}" required>
-      </div>
-      <div class="field">
-        <label for="gap_max">gap 상한(%)</label>
-        <input type="number" name="gap_max" id="gap_max" min="1" value="{{ gap_max }}" required>
-      </div>
-      <div class="field">
-        <label for="qty_pct_min">수량 하한(%)</label>
-        <input type="number" name="qty_pct_min" id="qty_pct_min" min="1" value="{{ qty_pct_min }}" required>
-      </div>
-      <div class="field">
-        <label for="qty_pct_max">수량 상한(%)</label>
-        <input type="number" name="qty_pct_max" id="qty_pct_max" min="1" value="{{ qty_pct_max }}" required>
-      </div>
-    </div>
-
-    <div class="form-row">
-      <div class="field">
         <label for="capital">자본금 <span class="hint">비우면 시작 자산</span></label>
         <input type="number" name="capital" id="capital" step="1" min="0" value="{{ capital }}" placeholder="시작 자산">
       </div>
@@ -303,6 +305,78 @@
         <label for="init_shares">시작 보유 주식수</label>
         <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
       </div>
+    </div>
+
+    <div class="form-row">
+      <div class="field">
+        <label for="x_feature">X축 (세로)</label>
+        <select name="x_feature" id="x_feature">
+          {% for feat, meta in features.items() %}
+          <option value="{{ feat }}" {% if feat == x_feature %}selected{% endif %}>{{ meta.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="y_feature">Y축 (가로)</label>
+        <select name="y_feature" id="y_feature">
+          {% for feat, meta in features.items() %}
+          <option value="{{ feat }}" {% if feat == y_feature %}selected{% endif %}>{{ meta.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      {% for feat in ['gap', 'qty_pct'] %}
+      {% set meta = features[feat] %}
+      {% set is_axis = (feat == x_feature or feat == y_feature) %}
+      <div class="axis-row feature-sweep" id="sweep-{{ feat }}" style="display: {{ '' if is_axis else 'none' }};">
+        <span class="group-label">{{ meta.label }} 스윕</span>
+        <div class="field">
+          <label for="{{ feat }}_min">하한</label>
+          <input type="number" name="{{ feat }}_min" id="{{ feat }}_min" min="1" value="{{ feature_inputs[feat].min }}">
+        </div>
+        <div class="field">
+          <label for="{{ feat }}_max">상한</label>
+          <input type="number" name="{{ feat }}_max" id="{{ feat }}_max" min="1" value="{{ feature_inputs[feat].max }}">
+        </div>
+      </div>
+      <div class="axis-row feature-fixed" id="fixed-{{ feat }}" style="display: {{ 'none' if is_axis else '' }};">
+        <span class="group-label">{{ meta.label }} 고정값</span>
+        <div class="field">
+          <label for="{{ feat }}_fixed">값</label>
+          <input type="number" name="{{ feat }}_fixed" id="{{ feat }}_fixed" step="0.1" min="0.1" value="{{ feature_inputs[feat].fixed }}">
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="form-row">
+      {% for feat in ['profit_gap', 'profit_recover'] %}
+      {% set meta = features[feat] %}
+      {% set is_axis = (feat == x_feature or feat == y_feature) %}
+      <div class="axis-row feature-sweep" id="sweep-{{ feat }}" style="display: {{ '' if is_axis else 'none' }};">
+        <span class="group-label">{{ meta.label }} 스윕</span>
+        <div class="field">
+          <label for="{{ feat }}_min">하한</label>
+          <input type="number" name="{{ feat }}_min" id="{{ feat }}_min" min="1" value="{{ feature_inputs[feat].min }}">
+        </div>
+        <div class="field">
+          <label for="{{ feat }}_max">상한</label>
+          <input type="number" name="{{ feat }}_max" id="{{ feat }}_max" min="1" value="{{ feature_inputs[feat].max }}">
+        </div>
+      </div>
+      <div class="axis-row feature-fixed" id="fixed-{{ feat }}" style="display: {{ 'none' if is_axis else '' }};">
+        <span class="group-label">{{ meta.label }} 고정값</span>
+        <div class="field">
+          <label for="{{ feat }}_fixed">값</label>
+          <input type="number" name="{{ feat }}_fixed" id="{{ feat }}_fixed" step="0.1" min="0.1" value="{{ feature_inputs[feat].fixed }}">
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="form-row">
       <button type="submit">히트맵 계산</button>
     </div>
   </form>
@@ -355,6 +429,35 @@
         alert('종목과 생성일자를 모두 선택해주세요.');
       }
     });
+
+    // X축/Y축 선택에 따라 각 피쳐의 스윕(min/max) 입력과 고정값 입력을 보이거나 숨긴다.
+    // 같은 피쳐를 X/Y 양쪽에 고르면 자동으로 서로 바꿔치기해서 항상 서로 달라지게 한다.
+    const FEATURES = {{ features.keys() | list | tojson }};
+    const xSelect = document.getElementById('x_feature');
+    const ySelect = document.getElementById('y_feature');
+
+    function updateFeatureVisibility() {
+      const x = xSelect.value;
+      const y = ySelect.value;
+      FEATURES.forEach(f => {
+        const isAxis = (f === x || f === y);
+        document.getElementById('sweep-' + f).style.display = isAxis ? '' : 'none';
+        document.getElementById('fixed-' + f).style.display = isAxis ? 'none' : '';
+      });
+    }
+
+    xSelect.addEventListener('change', () => {
+      if (xSelect.value === ySelect.value) {
+        ySelect.value = FEATURES.find(f => f !== xSelect.value);
+      }
+      updateFeatureVisibility();
+    });
+    ySelect.addEventListener('change', () => {
+      if (ySelect.value === xSelect.value) {
+        xSelect.value = FEATURES.find(f => f !== ySelect.value);
+      }
+      updateFeatureVisibility();
+    });
   </script>
   {% else %}
   <div class="empty">
@@ -371,84 +474,48 @@
     <div class="card">
       <h2>
         {{ code }} — 시작 {{ "{:,}".format(init_shares|int) }}주 / 시작 자산 {{ "{:,.0f}".format(initial_asset) }}
-        ({{ days }}일 데이터, {{ created_display }} 조회분)
+        ({{ days }}일 데이터, {{ created_display }} 조회분) — X축: {{ x_label }} / Y축: {{ y_label }}
       </h2>
       <div class="callout-grid">
         <a class="callout best" href="{{ best_link }}">
           <div class="label">🔺 최대 수익률</div>
           <div class="pct">{{ "{:+.2f}".format(best["profit_pct"]) }}%</div>
           <div class="final">최종자산 {{ "{:,.0f}".format(best["total"]) }}</div>
-          <div class="cond">gap {{ best["gap"] }}% / 수량 {{ best["qty_pct"] }}% ({{ best["qty"] }}주) / 매수 {{ best["매수횟수"] }}회 / 매도 {{ best["매도횟수"] }}회</div>
+          <div class="cond">
+            매매gap {{ best["gap"] }}% / 수량 {{ best["qty_pct"] }}% ({{ best["qty"] }}주)<br>
+            이익gap {{ best["profit_gap"] }}% / 회수율 {{ best["profit_recover"] }}%<br>
+            매수 {{ best["매수횟수"] }}회 / 매도 {{ best["매도횟수"] }}회 / 회수 {{ best["이익회수횟수"] }}회
+          </div>
         </a>
         <a class="callout worst" href="{{ worst_link }}">
           <div class="label">🔻 최소 수익률</div>
           <div class="pct">{{ "{:+.2f}".format(worst["profit_pct"]) }}%</div>
           <div class="final">최종자산 {{ "{:,.0f}".format(worst["total"]) }}</div>
-          <div class="cond">gap {{ worst["gap"] }}% / 수량 {{ worst["qty_pct"] }}% ({{ worst["qty"] }}주) / 매수 {{ worst["매수횟수"] }}회 / 매도 {{ worst["매도횟수"] }}회</div>
+          <div class="cond">
+            매매gap {{ worst["gap"] }}% / 수량 {{ worst["qty_pct"] }}% ({{ worst["qty"] }}주)<br>
+            이익gap {{ worst["profit_gap"] }}% / 회수율 {{ worst["profit_recover"] }}%<br>
+            매수 {{ worst["매수횟수"] }}회 / 매도 {{ worst["매도횟수"] }}회 / 회수 {{ worst["이익회수횟수"] }}회
+          </div>
         </a>
       </div>
     </div>
 
-    {% if recommended_qty %}
-    <div class="card">
-      <h2>대표 수량 분석</h2>
-      <p class="sub" style="margin-bottom: 16px; font-size: 12px;">
-        수량%별로 <b>매매가 1회 이상 발생한 gap</b>만 모아 수익률의 중앙값을 계산했습니다
-        (매매가 아예 없는 큰 gap은 수량과 무관하게 단순보유 수익률로 수렴해 대표값을
-        흐리기 때문에 제외). gap을 모르는 상태에서도 이 수량이면 대체로 가장 좋은 성과를
-        낸다는 뜻이며, 이익회수 히트맵의 거래 수량 기본값으로 활용할 수 있습니다.
-      </p>
-      <a class="callout best" href="{{ recommended_qty_link }}">
-        <div class="label">🎯 추천 수량 — 클릭하면 이 값으로 이익회수 히트맵 열기</div>
-        <div class="pct">{{ recommended_qty.qty_pct }}%</div>
-        <div class="final">중앙값 수익률 {{ "{:+.2f}".format(recommended_qty.median_profit_pct) }}%</div>
-        <div class="cond">매매 발생 gap {{ recommended_qty.traded_gap_count }}개 (스윕 범위 {{ gaps[0] }}~{{ gaps[-1] }}% 중)</div>
-      </a>
-      <div class="table-scroll" style="max-height: 280px; margin-top: 16px;">
-        <table class="rank-table">
-          <thead><tr><th>수량%</th><th>중앙값 수익률</th><th>매매 발생 gap 수</th></tr></thead>
-          <tbody>
-            {% for s in qty_stats %}
-            <tr class="{{ 'best-row' if s.qty_pct == recommended_qty.qty_pct }}">
-              <td>{{ s.qty_pct }}%</td>
-              {% if s.median_profit_pct is not none %}
-              <td class="{{ 'up' if s.median_profit_pct >= 0 else 'down' }}">{{ "{:+.2f}".format(s.median_profit_pct) }}%</td>
-              {% else %}
-              <td>—</td>
-              {% endif %}
-              <td>{{ s.traded_gap_count }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    {% elif qty_stats %}
-    <div class="card">
-      <h2>대표 수량 분석</h2>
-      <p style="color: var(--muted); font-size: 14px;">
-        스윕한 gap 범위({{ gaps[0] }}~{{ gaps[-1] }}%) 안에서는 어떤 수량으로도 매매가 발생하지
-        않아 대표 수량을 계산할 수 없습니다. gap 범위를 낮춰서 다시 계산해보세요.
-      </p>
-    </div>
-    {% endif %}
-
     <div class="card">
       <h2>수익률 상위/하위 10</h2>
       <p class="sub" style="margin-bottom: 16px; font-size: 12px;">
-        수익률이 동일한 조합은 중복 제거되어 하나만 표시됩니다 (같은 수익률 중 gap이 가장 작은 조합, gap도 같으면 수량이 가장 작은 조합을 노출).
+        수익률이 동일한 조합은 중복 제거되어 하나만 표시됩니다.
       </p>
       <div class="rank-grid">
         <div class="rank-col">
           <div class="rank-title up">🔺 상위 10</div>
           <table class="rank-table">
-            <thead><tr><th>#</th><th>gap</th><th>수량%</th><th>수익률</th><th>최종자산</th></tr></thead>
+            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>수익률</th><th>최종자산</th></tr></thead>
             <tbody>
               {% for c in top10 %}
               <tr class="{{ 'best-row' if loop.index == 1 }}">
                 <td>{{ loop.index }}</td>
-                <td><a href="{{ c.link }}">{{ c.gap }}%</a></td>
-                <td><a href="{{ c.link }}">{{ c.qty_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.x }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.y }}%</a></td>
                 <td class="up"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
               </tr>
@@ -459,13 +526,13 @@
         <div class="rank-col">
           <div class="rank-title down">🔻 하위 10</div>
           <table class="rank-table">
-            <thead><tr><th>#</th><th>gap</th><th>수량%</th><th>수익률</th><th>최종자산</th></tr></thead>
+            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>수익률</th><th>최종자산</th></tr></thead>
             <tbody>
               {% for c in bottom10 %}
               <tr class="{{ 'worst-row' if loop.index == 1 }}">
                 <td>{{ loop.index }}</td>
-                <td><a href="{{ c.link }}">{{ c.gap }}%</a></td>
-                <td><a href="{{ c.link }}">{{ c.qty_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.x }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.y }}%</a></td>
                 <td class="down"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
               </tr>
@@ -477,21 +544,21 @@
     </div>
 
     <div class="card">
-      <h2>히트맵 (세로: gap {{ gaps[0] }}~{{ gaps[-1] }}%, 가로: 수량 {{ qty_pcts[0] }}~{{ qty_pcts[-1] }}%)</h2>
+      <h2>히트맵 (세로: {{ x_label }} {{ xs[0] }}~{{ xs[-1] }}, 가로: {{ y_label }} {{ ys[0] }}~{{ ys[-1] }})</h2>
       <div class="heatmap-scroll">
         <div class="heatmap-outer">
-          <div class="axis-y-label">gap (%) — 아래로 갈수록 큼</div>
+          <div class="axis-y-label">{{ x_label }} — 아래로 갈수록 큼</div>
           <div class="heatmap-col">
-            <div class="heatmap-grid" style="grid-template-columns: repeat({{ qty_pcts|length }}, 12px);">
+            <div class="heatmap-grid" style="grid-template-columns: repeat({{ ys|length }}, 12px);">
               {% for cell in cells %}
               <a class="heatmap-cell {% if cell.is_best %}best{% elif cell.is_worst %}worst{% endif %}"
                  href="{{ cell.link }}"
                  style="background-color: {{ cell.color }};"
-                 title="gap {{ cell.gap }}% / 수량 {{ cell.qty_pct }}% → {{ '{:+.2f}'.format(cell.pct) }}% (최종자산 {{ '{:,.0f}'.format(cell.total) }})">
+                 title="{{ x_label }} {{ cell.x }} / {{ y_label }} {{ cell.y }} → {{ '{:+.2f}'.format(cell.pct) }}% (최종자산 {{ '{:,.0f}'.format(cell.total) }})">
               </a>
               {% endfor %}
             </div>
-            <div class="axis-x-label">매매 수량 (%, 시작 보유 주식수 대비) — 오른쪽으로 갈수록 큼</div>
+            <div class="axis-x-label">{{ y_label }} — 오른쪽으로 갈수록 큼</div>
           </div>
         </div>
       </div>
@@ -519,15 +586,16 @@
         <summary>전체 수익률 보기 (max → min, {{ ranked|length }}개, 중복 수익률 제거)</summary>
         <div class="ranked-scroll">
           <table class="rank-table">
-            <thead><tr><th>#</th><th>gap</th><th>수량%</th><th>매수</th><th>매도</th><th>수익률</th><th>최종자산</th></tr></thead>
+            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>매수</th><th>매도</th><th>회수</th><th>수익률</th><th>최종자산</th></tr></thead>
             <tbody>
               {% for c in ranked %}
               <tr class="{{ 'best-row' if loop.index == 1 }}{{ ' worst-row' if loop.index == ranked|length }}">
                 <td>{{ loop.index }}</td>
-                <td><a href="{{ c.link }}">{{ c.gap }}%</a></td>
-                <td><a href="{{ c.link }}">{{ c.qty_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.x }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.y }}%</a></td>
                 <td><a href="{{ c.link }}">{{ c['매수횟수'] }}</a></td>
                 <td><a href="{{ c.link }}">{{ c['매도횟수'] }}</a></td>
+                <td><a href="{{ c.link }}">{{ c['이익회수횟수'] }}</a></td>
                 <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
               </tr>
@@ -541,6 +609,8 @@
     <script>
       const RANK_CHART_DEDUP = {{ ranked | tojson }};
       const RANK_CHART_RAW = {{ ranked_raw | tojson }};
+      const X_LABEL = {{ x_label | tojson }};
+      const Y_LABEL = {{ y_label | tojson }};
 
       function toRankChartData(list) {
         return {
@@ -579,7 +649,7 @@
                 label: (item) => {
                   const c = rankChartSource[item.dataIndex];
                   const sign = c.profit_pct >= 0 ? '+' : '';
-                  return `${sign}${c.profit_pct.toFixed(2)}%  최종자산 ${Math.round(c.total).toLocaleString()}  (gap ${c.gap}% / 수량 ${c.qty_pct}% / 매수 ${c['매수횟수']} / 매도 ${c['매도횟수']})`;
+                  return `${sign}${c.profit_pct.toFixed(2)}%  최종자산 ${Math.round(c.total).toLocaleString()}  (${X_LABEL} ${c.x} / ${Y_LABEL} ${c.y} / 매수 ${c['매수횟수']} / 매도 ${c['매도횟수']} / 회수 ${c['이익회수횟수']})`;
                 }
               }
             }

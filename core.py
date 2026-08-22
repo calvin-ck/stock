@@ -12,6 +12,7 @@ import sys
 import re
 import time
 import argparse
+import statistics
 from io import StringIO
 from datetime import datetime, timedelta
 
@@ -207,11 +208,13 @@ def _simulate_grid(
     buy_gap_percent: float,
     trade_qty: int,
     initial_shares: int,
-    sell_only: bool = False,
+    no_sell: bool = False,
+    no_buy: bool = False,
     allow_negative_cash: bool = False,
     record_log: bool = False,
     profit_gap_percent: float = None,
     profit_recover_percent: float = None,
+    capital: float = None,
 ) -> dict:
     """
     그리드 매매 전략의 실제 시뮬레이션 루프 (트레일링 고점/저점 방식).
@@ -219,15 +222,17 @@ def _simulate_grid(
 
     옵션
     ----
-    sell_only : True면 매도만 하고 매수는 절대 하지 않는다.
+    no_sell : True면 매도를 하지 않는다 (매수는 정상 동작).
+    no_buy : True면 매수를 하지 않는다 (매도는 정상 동작).
     allow_negative_cash : True면 매수 시 현금 잔고를 확인하지 않고 trade_qty를 그대로 매수한다
         (초창기 모델 방식 — 현금이 마이너스가 될 수 있음).
         False(기본)면 "쌓인 현금으로 살 수 있는 만큼"과 trade_qty 중 작은 값만큼만 매수한다.
     record_log : True면 매매일지를 기록해서 반환한다 (느림). False면 최종 결과만 계산한다 (빠름,
         히트맵처럼 수천~수만 번 반복 계산할 때 사용).
-    profit_gap_percent, profit_recover_percent : 둘 다 지정하면 "이익 회수"(백테스트2) 기능이
-        추가로 동작한다. grid_trade_strategy()의 해당 파라미터 설명 참고. 하나만 None이 아니면
-        호출자(grid_trade_strategy)가 이미 검증했다고 가정한다.
+    profit_gap_percent, profit_recover_percent, capital : 앞의 둘을 함께 지정하면 "이익 회수"
+        기능이 추가로 동작한다. grid_trade_strategy()의 해당 파라미터 설명 참고.
+        profit_gap_percent만 None이 아니면 호출자(grid_trade_strategy)가 이미 검증했다고
+        가정한다.
     """
     sell_gap_ratio = sell_gap_percent / 100.0
     buy_gap_ratio = buy_gap_percent / 100.0
@@ -238,15 +243,26 @@ def _simulate_grid(
     sell_count = 0
     buy_count = 0
     trade_log = [] if record_log else None
+    asset_log = [] if record_log else None
 
     profit_sweep = profit_gap_percent is not None
     if profit_sweep:
         profit_gap_ratio = profit_gap_percent / 100.0
         profit_recover_ratio = profit_recover_percent / 100.0
-        profit_base_price = prices[0]  # 이익 회수 기준가도 max/min처럼 첫날 종가로 시작
+        # 자본금 미지정 시 시작 자산(초기 보유주식수 x 첫날 종가)을 자본금으로 삼는다.
+        capital = capital if capital is not None else initial_shares * prices[0]
         reserve = 0.0
         recover_count = 0
         recover_log = [] if record_log else None
+
+    if record_log:
+        # 첫날(거래 발생 전 시작 상태) 스냅샷도 자산 추이 그래프의 시작점으로 남겨둔다.
+        asset_log.append({
+            "날짜": dates[0] if dates is not None else None,
+            "주가": prices[0], "현금": cash, "보유주식수": shares,
+            "주식평가금액": prices[0] * shares, "적립금": 0.0,
+            "total": prices[0] * shares + cash,
+        })
 
     for i in range(1, len(prices)):
         price = prices[i]
@@ -262,37 +278,40 @@ def _simulate_grid(
         max_snapshot = max_price
         min_snapshot = min_price
 
-        # 이익 회수 이벤트 (백테스트2 전용): 매수/매도 판단(이하 sell/buy 로직)과는 완전히
-        # 독립적으로, 매일 먼저 체크한다. 기준가(profit_base_price) 대비 profit_gap_percent%
-        # 이상 오르면 발동 — 이때 "현금에서 떼어내는" 게 아니라, 필요한 만큼 주식을 직접
-        # 매도해서 그 대금을 적립금으로 옮긴다 (일반 매도 로직의 max/횟수와는 무관).
-        if profit_sweep and price >= profit_base_price * (1 + profit_gap_ratio):
-            base_snapshot = profit_base_price
-            profit = shares * (price - base_snapshot)
-            if profit > 0 and shares > 0:
-                # 회수해야 할 금액(평가차익 x 회수율)만큼을 현재가로 환산해 몇 주를 팔지 정한다.
-                # 주식 수는 정수 단위라 목표 금액을 소수 없이 채우지 못할 수 있어 내림 처리한다.
+        # 이익 회수 이벤트: 매수/매도 판단(이하 sell/buy 로직)과는 완전히
+        # 독립적으로, 매일 먼저 체크한다. 평가금액(주식평가금액+현금)이 자본금 대비
+        # profit_gap_percent% 이상 벌었으면 발동한다 (자본금은 고정값이라 별도 리셋이
+        # 필요 없다 — 회수로 평가금액 자체가 줄어들며 자연히 다시 벌어야 재발동한다).
+        if profit_sweep:
+            current_value = shares * price + cash
+            profit = current_value - capital
+            if profit > 0 and profit >= capital * profit_gap_ratio:
+                # 회수해야 할 금액(평가차익 x 회수율)을 현금에서 먼저 충당하고, 모자란
+                # 만큼은 주식을 추가로 매도해 마련한다. 주식 수는 정수 단위라 목표 금액을
+                # 소수 없이 채우지 못할 수 있어 내림 처리한다.
                 target_value = profit * profit_recover_ratio
-                recover_shares = min(shares, int(target_value // price))
-                if recover_shares > 0:
-                    recovered = recover_shares * price
-                    shares -= recover_shares
+                cash_used = min(cash, target_value)
+                remaining = target_value - cash_used
+                shares_sold = min(shares, int(remaining // price)) if remaining > 0 else 0
+                recovered = cash_used + shares_sold * price
+                if recovered > 0:
+                    cash -= cash_used
+                    shares -= shares_sold
                     reserve += recovered
                     recover_count += 1
                     if record_log:
                         recover_log.append({
-                            "날짜": date, "구분": "이익회수", "기준가": base_snapshot,
-                            "가격": price, "평가차익": profit, "매도주식수": recover_shares,
+                            "날짜": date, "구분": "이익회수", "자본금": capital,
+                            "가격": price, "평가금액": current_value, "평가차익": profit,
+                            "현금사용액": cash_used, "매도주식수": shares_sold,
                             "회수액": recovered, "적립금잔고": reserve, "현금잔고": cash,
                             "보유주식수": shares, "주식평가금액": price * shares,
                         })
-            # 회수 여부와 무관하게, 조건이 충족되면 기준가를 그 시점 주가로 갱신한다.
-            # (그렇지 않으면 오래된 기준가가 계속 남아 이후 작은 상승에도 이벤트가 반복 발동한다.)
-            profit_base_price = price
 
-        # 매도: max 대비 sell_gap% 하락, 단 전날보다 내려간 날에만
+        # 매도: max 대비 sell_gap% 하락, 단 전날보다 내려간 날에만 (no_sell이면 아예 건너뜀)
         if (
-            price <= max_snapshot * (1 - sell_gap_ratio)
+            not no_sell
+            and price <= max_snapshot * (1 - sell_gap_ratio)
             and shares >= trade_qty
             and price < prev_price
         ):
@@ -309,8 +328,8 @@ def _simulate_grid(
                     "주식평가금액": price * shares,
                 })
 
-        # 매수: min 대비 buy_gap% 상승, 단 전날보다 올라간 날에만 (sell_only면 아예 건너뜀)
-        if (not sell_only) and price >= min_snapshot * (1 + buy_gap_ratio) and price > prev_price:
+        # 매수: min 대비 buy_gap% 상승, 단 전날보다 올라간 날에만 (no_buy면 아예 건너뜀)
+        if (not no_buy) and price >= min_snapshot * (1 + buy_gap_ratio) and price > prev_price:
             if allow_negative_cash:
                 # 초창기 모델: 현금 부족 여부와 무관하게 trade_qty를 그대로 매수 (현금 마이너스 허용)
                 buy_qty = trade_qty
@@ -335,6 +354,14 @@ def _simulate_grid(
                         "주식평가금액": price * shares,
                     })
 
+        if record_log:
+            reserve_now = reserve if profit_sweep else 0.0
+            asset_log.append({
+                "날짜": date, "주가": price, "현금": cash, "보유주식수": shares,
+                "주식평가금액": price * shares, "적립금": reserve_now,
+                "total": price * shares + cash + reserve_now,
+            })
+
         prev_price = price
 
     final_price = prices[-1]
@@ -351,8 +378,10 @@ def _simulate_grid(
         "매도횟수": sell_count,
         "매수횟수": buy_count,
         "매매일지": trade_log if record_log else [],
+        "자산추이": asset_log if record_log else [],
     }
     if profit_sweep:
+        result["자본금"] = capital
         result["이익회수횟수"] = recover_count
         result["이익회수일지"] = recover_log if record_log else []
     return result
@@ -366,10 +395,12 @@ def grid_trade_strategy(
     initial_shares: int = 100,
     price_col: str = "종가",
     date_col: str = "날짜",
-    sell_only: bool = False,
+    no_sell: bool = False,
+    no_buy: bool = False,
     allow_negative_cash: bool = False,
     profit_gap_percent: float = None,
     profit_recover_percent: float = None,
+    capital: float = None,
 ) -> dict:
     """
     등락폭(gap) 기반 그리드 매매 전략 백테스트 (트레일링 고점/저점 방식).
@@ -380,24 +411,26 @@ def grid_trade_strategy(
     - max, min 기준값은 첫날 종가로 시작
     - 주가가 현재 max보다 오르면 max를 그 가격으로 갱신 (최근 고점을 계속 추적)
     - 주가가 현재 min보다 내리면 min을 그 가격으로 갱신 (최근 저점을 계속 추적)
-    - 현재가가 max에서 sell_gap% 만큼 떨어지면 -> trade_qty 만큼 매도, max를 매도가로 갱신
-      (이후 그 매도가부터 새로운 고점을 다시 추적). 단, **전날보다 가격이 내려간 날에만** 매도한다.
-    - (sell_only=True가 아니면) 현재가가 min에서 buy_gap% 만큼 오르면 -> 매수를 시도한다.
+    - (no_sell=True가 아니면) 현재가가 max에서 sell_gap% 만큼 떨어지면 -> trade_qty 만큼 매도,
+      max를 매도가로 갱신(이후 그 매도가부터 새로운 고점을 다시 추적). 단, **전날보다 가격이
+      내려간 날에만** 매도한다.
+    - (no_buy=True가 아니면) 현재가가 min에서 buy_gap% 만큼 오르면 -> 매수를 시도한다.
       단, **전날보다 가격이 올라간 날에만** 매수한다.
     - 전날 대비 상승/하락 조건 덕분에 하루에 매도와 매수가 동시에 발생하는 일은 없다.
 
-    이익 회수 (백테스트2, profit_gap_percent/profit_recover_percent를 둘 다 지정할 때만 동작)
+    이익 회수 (profit_gap_percent/profit_recover_percent를 둘 다 지정할 때만 동작)
     ----
     - 매수/매도 로직과는 완전히 독립적으로 동작한다 (max/min, 매도·매수 횟수에 영향 없음).
-    - 기준가(profit_base_price)는 max/min과 마찬가지로 첫날 종가로 시작한다.
-    - 매일, 매수/매도 판단보다 먼저 확인한다: 주가가 기준가보다 profit_gap_percent% 이상
-      오르면 이벤트 발동.
-    - 발동 시 평가차익 = 보유주식수 × (현재가 − 기준가). 이 중 profit_recover_percent%에
-      해당하는 금액만큼 **주식을 직접 매도**해서(현재가 기준, 정수 주식수로 내림 처리) 그
-      대금을 "적립금"으로 옮긴다 — 기존 현금과는 무관하게, 필요한 만큼 주식을 팔아서
-      회수한다. 적립금은 이후 매수 자금으로 쓰이지 않고, 최종 total 계산에는 그대로
-      합산된다.
-    - 발동하면(실제로 회수됐는지와 무관하게) 기준가를 그 시점 주가로 갱신한다.
+    - 자본금(capital)을 기준으로 삼는다. 지정하지 않으면 시작 자산(initial_shares × 첫날
+      종가)을 자본금으로 사용한다.
+    - 매일, 매수/매도 판단보다 먼저 확인한다: 평가금액(주식평가금액 + 현금)이 자본금 대비
+      profit_gap_percent% 이상 벌었으면 이벤트 발동.
+    - 발동 시 평가차익 = 평가금액 − 자본금. 이 중 profit_recover_percent%에 해당하는
+      금액을 **현금에서 먼저 충당**하고, 모자란 만큼 **주식을 추가로 매도**해서(현재가 기준,
+      정수 주식수로 내림 처리) 마련한 뒤 "적립금"으로 옮긴다. 적립금은 이후 매수 자금으로
+      쓰이지 않고, 최종 total 계산에는 그대로 합산된다.
+    - 자본금은 고정값이라 별도로 갱신하지 않는다. 회수로 평가금액 자체가 줄어들기 때문에
+      다시 자본금 대비 profit_gap_percent%만큼 벌어야 재발동한다.
 
     Parameters
     ----------
@@ -416,16 +449,21 @@ def grid_trade_strategy(
         기준으로 삼을 가격 컬럼명 (기본 '종가')
     date_col : str
         날짜 컬럼명 (기본 '날짜'), 매매일지에 사용
-    sell_only : bool
-        True면 매도만 하고 매수는 절대 하지 않는다 (기본 False)
+    no_sell : bool
+        True면 매도를 하지 않는다 (매수는 정상 동작, 기본 False)
+    no_buy : bool
+        True면 매수를 하지 않는다 (매도는 정상 동작, 기본 False)
     allow_negative_cash : bool
         True면 현금 잔고와 무관하게 trade_qty를 그대로 매수한다 (초창기 모델 방식,
         현금이 마이너스가 될 수 있음). False(기본)면 쌓인 현금 범위 내에서만 매수한다.
     profit_gap_percent : float, optional
-        이익 회수 이벤트 트리거 등락폭 (%). 기준가 대비 이만큼 오르면 발동. 둘 다 지정해야
+        이익 회수 이벤트 트리거 등락폭 (%). 자본금 대비 이만큼 벌면 발동. 둘 다 지정해야
         이익 회수 기능이 켜진다 (지정 안 하면 기존과 완전히 동일하게 동작).
     profit_recover_percent : float, optional
-        이벤트 발동 시 평가차익 중 주식을 매도해 회수할 비율 (1~100).
+        이벤트 발동 시 평가차익 중 회수할 비율 (1~100).
+    capital : float, optional
+        이익 회수 기준이 되는 자본금. 지정하지 않으면 시작 자산(initial_shares × 첫날 종가)을
+        자본금으로 사용한다.
 
     Returns
     -------
@@ -444,11 +482,17 @@ def grid_trade_strategy(
                        "max": 매매 판단 시점의 고점, "min": 매매 판단 시점의 저점,
                        "등락률": 매도는 (가격-max)/max*100, 매수는 (가격-min)/min*100,
                        "주식평가금액": 가격 * 매매 직후 보유주식수}, ...],
-            # 이익 회수 기능을 켰을 때만 아래 두 키가 추가된다.
+            "자산추이": [{"날짜":..., "주가":..., "현금":..., "보유주식수":...,
+                       "주식평가금액":..., "적립금":..., "total":...}, ...],
+                # 첫날부터 마지막 날까지 매일의 스냅샷 (거래 발생 여부와 무관, 그래프용).
+                # 이익 회수 미사용 시 "적립금"은 항상 0.
+            # 이익 회수 기능을 켰을 때만 아래 세 키가 추가된다.
+            "자본금": 이익 회수에 사용된 자본금 (지정 안 했으면 자동 계산된 시작 자산),
             "이익회수횟수": ...,
-            "이익회수일지": [{"날짜":..., "구분":"이익회수", "기준가":..., "가격":...,
-                          "평가차익":..., "매도주식수":..., "회수액":..., "적립금잔고":...,
-                          "현금잔고":..., "보유주식수":..., "주식평가금액":...}, ...],
+            "이익회수일지": [{"날짜":..., "구분":"이익회수", "자본금":..., "가격":...,
+                          "평가금액":..., "평가차익":..., "현금사용액":..., "매도주식수":...,
+                          "회수액":..., "적립금잔고":..., "현금잔고":..., "보유주식수":...,
+                          "주식평가금액":...}, ...],
         }
     """
     if df.empty:
@@ -470,8 +514,9 @@ def grid_trade_strategy(
 
     return _simulate_grid(
         prices, dates, sell_gap_percent, buy_gap_percent, trade_qty, initial_shares,
-        sell_only=sell_only, allow_negative_cash=allow_negative_cash, record_log=True,
+        no_sell=no_sell, no_buy=no_buy, allow_negative_cash=allow_negative_cash, record_log=True,
         profit_gap_percent=profit_gap_percent, profit_recover_percent=profit_recover_percent,
+        capital=capital,
     )
 
 
@@ -481,10 +526,12 @@ def _run_grid_fast(
     trade_qty: int,
     initial_shares: int = 100,
     buy_gap_percent: float = None,
-    sell_only: bool = False,
+    no_sell: bool = False,
+    no_buy: bool = False,
     allow_negative_cash: bool = False,
     profit_gap_percent: float = None,
     profit_recover_percent: float = None,
+    capital: float = None,
 ) -> dict:
     """
     grid_trade_strategy()와 완전히 동일한 로직이지만, 매매일지를 기록하지 않아
@@ -496,50 +543,79 @@ def _run_grid_fast(
         buy_gap_percent = sell_gap_percent
     return _simulate_grid(
         prices, None, sell_gap_percent, buy_gap_percent, trade_qty, initial_shares,
-        sell_only=sell_only, allow_negative_cash=allow_negative_cash, record_log=False,
+        no_sell=no_sell, no_buy=no_buy, allow_negative_cash=allow_negative_cash, record_log=False,
         profit_gap_percent=profit_gap_percent, profit_recover_percent=profit_recover_percent,
+        capital=capital,
     )
+
+
+def resolve_trade_qty(initial_shares: int, qty_percent: float) -> int:
+    """
+    시작 보유 주식수 대비 비율(%)로 매매 수량(주)을 계산한다 (최소 1주).
+    시작 보유 주식수를 기준으로 **한 번만** 계산하며, 이후 보유 주식수가 매매로 바뀌어도
+    다시 계산하지 않는다 — 지금까지의 "고정 수량" 매매 로직과 동일하게 동작한다.
+    """
+    return max(1, round(initial_shares * qty_percent / 100))
 
 
 def compute_profit_heatmap(
     df: pd.DataFrame,
     gap_values,
-    qty_values,
+    qty_percent_values,
     initial_shares: int = 100,
     price_col: str = "종가",
     date_col: str = "날짜",
-    sell_only: bool = False,
+    no_sell: bool = False,
+    no_buy: bool = False,
     allow_negative_cash: bool = False,
+    capital: float = None,
 ) -> dict:
     """
-    gap(%) x 매매수량 조합별 최종 수익률(%)을 계산해 히트맵용 데이터를 만든다.
+    gap(%) x 매매수량(%) 조합별 최종 수익률(%)을 계산해 히트맵용 데이터를 만든다.
     (여기서는 매수/매도 gap을 동일한 값으로 스윕한다.)
+
+    매매수량은 절대 주식수가 아니라 **시작 보유 주식수 대비 비율(%)**로 지정한다
+    (`resolve_trade_qty()`로 시작 시점에 한 번만 절대 수량으로 변환) — 보유 주식수가
+    커져도 절대 수량 범위를 그에 맞춰 새로 정할 필요 없이 항상 같은 %범위로 의미 있는
+    스윕이 가능하다.
 
     Parameters
     ----------
     gap_values : iterable[float]
         gap(%) 값 목록 (예: range(1, 101) -> 1~100%)
-    qty_values : iterable[int]
-        매매 수량 값 목록 (예: range(1, 101) -> 1~100주)
-    sell_only, allow_negative_cash : grid_trade_strategy() 참고
+    qty_percent_values : iterable[float]
+        매매 수량 비율(%) 값 목록 (예: range(1, 51) -> 시작 보유 주식수의 1~50%)
+    capital : float, optional
+        수익률(%) 계산 기준이 되는 시작 자산. 지정하지 않으면 시작 자산
+        (initial_shares × 첫날 종가)을 그대로 사용한다.
+    no_sell, no_buy, allow_negative_cash : grid_trade_strategy() 참고
 
     Returns
     -------
     dict
         {
-            "gaps": [...], "qtys": [...],
-            "grid": [[qty별 수익률(%), ...], ...]  # grid[i][j] = gaps[i] x qtys[j] 조합
-            "best": {"gap":..., "qty":..., "profit_pct":...},
-            "worst": {"gap":..., "qty":..., "profit_pct":...},
-            "top10": [{"gap":..., "qty":..., "profit_pct":..., "매수횟수":..., "매도횟수":...}, ...],  # 상위 10 (내림차순)
-            "bottom10": [{"gap":..., "qty":..., "profit_pct":..., "매수횟수":..., "매도횟수":...}, ...],  # 하위 10 (오름차순)
-            "ranked": [{"gap":..., "qty":..., "profit_pct":..., "매수횟수":..., "매도횟수":...}, ...],  # 전체 조합(중복 제거), max -> min 순
-            "raw_ranked": [{"gap":..., "qty":..., "profit_pct":..., "매수횟수":..., "매도횟수":...}, ...],  # 전체 조합(중복 미제거), max -> min 순
-            "initial_asset": 시작 자산,
+            "gaps": [...], "qty_pcts": [...],
+            "grid": [[qty%별 수익률(%), ...], ...]  # grid[i][j] = gaps[i] x qty_pcts[j] 조합
+            "best": {"gap":..., "qty_pct":..., "qty":..., "profit_pct":..., "total":...},
+            "worst": {"gap":..., "qty_pct":..., "qty":..., "profit_pct":..., "total":...},
+            "top10": [{"gap":..., "qty_pct":..., "qty":..., "profit_pct":..., "total":...,
+                       "매수횟수":..., "매도횟수":...}, ...],  # 상위 10 (내림차순)
+            "bottom10": [...],  # 하위 10 (오름차순)
+            "ranked": [...],   # 전체 조합(중복 제거), max -> min 순
+            "raw_ranked": [...],  # 전체 조합(중복 미제거), max -> min 순
+            "initial_asset": 수익률 계산에 쓰인 시작 자산 (capital 지정 시 그 값, 아니면
+                initial_shares × 첫날 종가),
+            "qty_stats": [{"qty_pct":..., "median_profit_pct":..., "traded_gap_count":...}, ...],
+                # 수량%별로, 매매가 1회 이상 발생한 gap들만 모아 수익률의 중앙값을 낸 값.
+                # 매매가 전혀 발생하지 않은 수량%는 median_profit_pct가 None.
+            "recommended_qty": qty_stats 중 median_profit_pct가 가장 높은 항목 (전부 None이면 None),
+                # "gap을 모르는 상태에서 이 수량%가 대체로 가장 좋은 성과를 낸다"는 의미의 대표 수량.
         }
+        (각 조합의 "qty"는 "qty_pct"를 resolve_trade_qty()로 변환한 실제 매매 주식수,
+        "total"은 그 조합으로 백테스트했을 때의 최종 자산)
 
     top10/bottom10/ranked는 수익률이 같은 조합이 여러 개면 그중 하나만 남긴다(중복 제거).
-    남기는 기준: gap이 가장 작은 조합 우선, gap도 같으면 수량이 가장 작은 조합.
+    남기는 기준: gap이 가장 작은 조합 우선, gap도 같으면 수량비율이 가장 작은 조합.
     (grid 전체, best/worst, raw_ranked에는 중복 제거를 적용하지 않는다.)
     """
     if df.empty:
@@ -549,28 +625,29 @@ def compute_profit_heatmap(
     prices = sorted_df[price_col].tolist()
 
     first_price = prices[0]
-    initial_asset = initial_shares * first_price
+    initial_asset = capital if capital is not None else initial_shares * first_price
 
     gaps = list(gap_values)
-    qtys = list(qty_values)
+    qty_pcts = list(qty_percent_values)
 
     grid = []
-    all_combos = []  # top10/bottom10 계산용 (gap, qty, profit_pct) 전체 모음
-    best = {"gap": None, "qty": None, "profit_pct": float("-inf")}
-    worst = {"gap": None, "qty": None, "profit_pct": float("inf")}
+    all_combos = []  # top10/bottom10 계산용 (gap, qty_pct, profit_pct) 전체 모음
+    best = {"gap": None, "qty_pct": None, "qty": None, "profit_pct": float("-inf")}
+    worst = {"gap": None, "qty_pct": None, "qty": None, "profit_pct": float("inf")}
 
     for g in gaps:
         row = []
-        for q in qtys:
+        for qp in qty_pcts:
+            resolved_qty = resolve_trade_qty(initial_shares, qp)
             run_result = _run_grid_fast(
-                prices, sell_gap_percent=g, trade_qty=q, initial_shares=initial_shares,
-                sell_only=sell_only, allow_negative_cash=allow_negative_cash,
+                prices, sell_gap_percent=g, trade_qty=resolved_qty, initial_shares=initial_shares,
+                no_sell=no_sell, no_buy=no_buy, allow_negative_cash=allow_negative_cash,
             )
             total = run_result["total"]
             profit_pct = (total - initial_asset) / initial_asset * 100 if initial_asset else 0.0
             row.append(profit_pct)
             combo = {
-                "gap": g, "qty": q, "profit_pct": profit_pct,
+                "gap": g, "qty_pct": qp, "qty": resolved_qty, "profit_pct": profit_pct, "total": total,
                 "매수횟수": run_result["매수횟수"], "매도횟수": run_result["매도횟수"],
             }
             all_combos.append(combo)
@@ -581,9 +658,9 @@ def compute_profit_heatmap(
         grid.append(row)
 
     # top10/bottom10/ranked는 수익률이 같은 조합을 중복 제거한 뒤 뽑는다: 같은 수익률이면
-    # gap이 가장 작은 조합을, gap도 같으면 수량이 가장 작은 조합을 남긴다.
-    # all_combos는 gap 오름차순(바깥 루프) -> qty 오름차순(안쪽 루프) 순서로 쌓이므로,
-    # 특정 수익률이 처음 등장하는 조합이 곧 그 수익률 중 gap 최소/수량 최소 조합이다.
+    # gap이 가장 작은 조합을, gap도 같으면 수량비율이 가장 작은 조합을 남긴다.
+    # all_combos는 gap 오름차순(바깥 루프) -> qty_pct 오름차순(안쪽 루프) 순서로 쌓이므로,
+    # 특정 수익률이 처음 등장하는 조합이 곧 그 수익률 중 gap 최소/수량비율 최소 조합이다.
     seen_profit_pct = set()
     dedup_combos = []
     for combo in all_combos:
@@ -599,9 +676,31 @@ def compute_profit_heatmap(
     ranked = dedup_combos  # 전체 조합을 max -> min 순으로 나열 (중복 제거 적용)
     raw_ranked = sorted(all_combos, key=lambda c: c["profit_pct"], reverse=True)  # 중복 미제거 버전
 
+    # 수량%별 대표값: gap 축을 모아 "이 수량이면 gap을 모르는 상태에서 대체로 어떤 성과를
+    # 내는지"를 중앙값으로 요약한다. gap이 커지면 매매가 거의 발생하지 않아 수량과 무관하게
+    # 전부 단순보유 수익률로 수렴해버리므로, 그런 조합은 제외하고 실제로 매매가 1회 이상
+    # 발생한 gap만 사용해야 수량별 차이가 흐려지지 않는다.
+    qty_stats = []
+    for qp in qty_pcts:
+        traded = [
+            c for c in all_combos
+            if c["qty_pct"] == qp and (c["매수횟수"] + c["매도횟수"]) > 0
+        ]
+        median_profit_pct = statistics.median(c["profit_pct"] for c in traded) if traded else None
+        qty_stats.append({
+            "qty_pct": qp,
+            "median_profit_pct": median_profit_pct,
+            "traded_gap_count": len(traded),
+        })
+    recommended_qty = max(
+        (s for s in qty_stats if s["median_profit_pct"] is not None),
+        key=lambda s: s["median_profit_pct"],
+        default=None,
+    )
+
     return {
         "gaps": gaps,
-        "qtys": qtys,
+        "qty_pcts": qty_pcts,
         "grid": grid,
         "best": best,
         "worst": worst,
@@ -610,6 +709,8 @@ def compute_profit_heatmap(
         "ranked": ranked,
         "raw_ranked": raw_ranked,
         "initial_asset": initial_asset,
+        "qty_stats": qty_stats,
+        "recommended_qty": recommended_qty,
     }
 
 
@@ -617,30 +718,36 @@ def compute_profit_heatmap2(
     df: pd.DataFrame,
     gap_values,
     profit_gap_values,
-    trade_qty: int,
+    trade_qty_percent: float,
     profit_recover_percent: float,
     initial_shares: int = 100,
     price_col: str = "종가",
     date_col: str = "날짜",
-    sell_only: bool = False,
+    no_sell: bool = False,
+    no_buy: bool = False,
     allow_negative_cash: bool = False,
+    capital: float = None,
 ) -> dict:
     """
-    백테스트2(이익 회수) 전용 히트맵: 매매 gap(%) x 이익회수 gap(%) 조합별 최종 수익률(%)을
-    계산한다. 거래 수량(trade_qty)과 회수율(profit_recover_percent)은 고정 입력값이라 스윕
-    대상이 아니다 (매매 gap은 매수/매도 동일한 값으로 스윕한다).
+    이익 회수 전용 히트맵: 매매 gap(%) x 이익회수 gap(%) 조합별 최종 수익률(%)을
+    계산한다. 거래 수량비율(trade_qty_percent), 회수율(profit_recover_percent), 자본금
+    (capital)은 고정 입력값이라 스윕 대상이 아니다 (매매 gap은 매수/매도 동일한 값으로
+    스윕한다). 수익률(%)은 이익 회수의 자본금(지정 안 했으면 시작 자산)을 기준으로 계산한다.
 
     Parameters
     ----------
     gap_values : iterable[float]
         매매 gap(%) 값 목록 (예: range(1, 51) -> 1~50%)
     profit_gap_values : iterable[float]
-        이익 회수 gap(%) 값 목록 (예: range(1, 51) -> 1~50%)
-    trade_qty : int
-        고정 매수/매도 수량
+        이익 회수 gap(%) 값 목록 (예: range(1, 51) -> 1~50%). 자본금 대비 벌어야 할 비율.
+    trade_qty_percent : float
+        고정 매수/매도 수량 비율(%) — 시작 보유 주식수 대비. resolve_trade_qty()로 시작
+        시점에 한 번만 절대 수량으로 변환해 사용한다.
     profit_recover_percent : float
         고정 이익 회수율 (1~100)
-    sell_only, allow_negative_cash : grid_trade_strategy() 참고
+    capital : float, optional
+        고정 자본금. 지정하지 않으면 시작 자산(initial_shares × 첫날 종가)을 사용한다.
+    no_sell, no_buy, allow_negative_cash : grid_trade_strategy() 참고
 
     Returns
     -------
@@ -648,17 +755,20 @@ def compute_profit_heatmap2(
         {
             "gaps": [...], "profit_gaps": [...],
             "grid": [[이익gap별 수익률(%), ...], ...]  # grid[i][j] = gaps[i] x profit_gaps[j] 조합
-            "best": {"gap":..., "profit_gap":..., "profit_pct":...},
-            "worst": {"gap":..., "profit_gap":..., "profit_pct":...},
-            "top10": [{"gap":..., "profit_gap":..., "profit_pct":...,
+            "best": {"gap":..., "profit_gap":..., "profit_pct":..., "total":...},
+            "worst": {"gap":..., "profit_gap":..., "profit_pct":..., "total":...},
+            "top10": [{"gap":..., "profit_gap":..., "profit_pct":..., "total":...,
                        "매수횟수":..., "매도횟수":..., "이익회수횟수":...}, ...],  # 상위 10 (내림차순)
             "bottom10": [...],  # 하위 10 (오름차순)
             "ranked": [...],   # 전체 조합(중복 제거), max -> min 순
             "raw_ranked": [...],  # 전체 조합(중복 미제거), max -> min 순
-            "trade_qty": 고정 거래 수량,
+            "trade_qty_percent": 고정 거래 수량 비율(%),
+            "trade_qty": 위 비율을 시작 보유 주식수 기준으로 변환한 실제 거래 수량,
             "profit_recover_percent": 고정 회수율,
-            "initial_asset": 시작 자산,
+            "capital": 이익 회수에 사용된 자본금 (지정 안 했으면 자동 계산된 시작 자산),
+            "initial_asset": 시작 자산 (= capital과 동일한 값. 수익률 계산 기준),
         }
+        (각 조합의 "total"은 그 조합으로 백테스트했을 때의 최종 자산)
 
     top10/bottom10/ranked는 수익률이 같은 조합이 여러 개면 그중 하나만 남긴다(중복 제거).
     남기는 기준: gap이 가장 작은 조합 우선, gap도 같으면 profit_gap이 가장 작은 조합.
@@ -672,6 +782,8 @@ def compute_profit_heatmap2(
 
     first_price = prices[0]
     initial_asset = initial_shares * first_price
+    capital_resolved = capital if capital is not None else initial_asset
+    trade_qty_resolved = resolve_trade_qty(initial_shares, trade_qty_percent)
 
     gaps = list(gap_values)
     profit_gaps = list(profit_gap_values)
@@ -685,15 +797,17 @@ def compute_profit_heatmap2(
         row = []
         for pg in profit_gaps:
             run_result = _run_grid_fast(
-                prices, sell_gap_percent=g, trade_qty=trade_qty, initial_shares=initial_shares,
-                sell_only=sell_only, allow_negative_cash=allow_negative_cash,
+                prices, sell_gap_percent=g, trade_qty=trade_qty_resolved, initial_shares=initial_shares,
+                no_sell=no_sell, no_buy=no_buy, allow_negative_cash=allow_negative_cash,
                 profit_gap_percent=pg, profit_recover_percent=profit_recover_percent,
+                capital=capital_resolved,
             )
             total = run_result["total"]
-            profit_pct = (total - initial_asset) / initial_asset * 100 if initial_asset else 0.0
+            # 시작 자산은 이익 회수의 자본금(지정 안 했으면 주식수 x 첫날 종가)을 그대로 사용한다.
+            profit_pct = (total - capital_resolved) / capital_resolved * 100 if capital_resolved else 0.0
             row.append(profit_pct)
             combo = {
-                "gap": g, "profit_gap": pg, "profit_pct": profit_pct,
+                "gap": g, "profit_gap": pg, "profit_pct": profit_pct, "total": total,
                 "매수횟수": run_result["매수횟수"], "매도횟수": run_result["매도횟수"],
                 "이익회수횟수": run_result["이익회수횟수"],
             }
@@ -733,9 +847,173 @@ def compute_profit_heatmap2(
         "bottom10": bottom10,
         "ranked": ranked,
         "raw_ranked": raw_ranked,
-        "trade_qty": trade_qty,
+        "trade_qty_percent": trade_qty_percent,
+        "trade_qty": trade_qty_resolved,
         "profit_recover_percent": profit_recover_percent,
+        "capital": capital_resolved,
+        "initial_asset": capital_resolved,
+    }
+
+
+# 히트맵에서 축/고정값으로 고를 수 있는 4개 피쳐와 기본값.
+# "sweep_default": 그 피쳐를 축으로 골랐을 때 스윕 범위(하한, 상한) 기본값 (1% 단위).
+# "fixed_default": 그 피쳐를 축으로 안 골랐을 때 적용할 고정값 기본값.
+# (/backtest 폼의 기본값과 동일하게 맞춰 두 화면을 오갈 때 값이 낯설지 않게 했다.)
+HEATMAP_FEATURES = {
+    "gap": {"label": "주가 gap (%)", "sweep_default": (1, 50), "fixed_default": 10},
+    "qty_pct": {"label": "매매 수량 (%)", "sweep_default": (1, 50), "fixed_default": 10},
+    "profit_gap": {"label": "이익 gap (%)", "sweep_default": (1, 100), "fixed_default": 100},
+    "profit_recover": {"label": "이익 회수율 (%)", "sweep_default": (1, 100), "fixed_default": 100},
+}
+
+
+def compute_profit_heatmap_2d(
+    df: pd.DataFrame,
+    x_feature: str,
+    x_values,
+    y_feature: str,
+    y_values,
+    fixed: dict,
+    initial_shares: int = 100,
+    price_col: str = "종가",
+    date_col: str = "날짜",
+    no_sell: bool = False,
+    no_buy: bool = False,
+    allow_negative_cash: bool = False,
+    capital: float = None,
+) -> dict:
+    """
+    HEATMAP_FEATURES의 4개 피쳐(주가gap/매매수량/이익gap/이익회수율) 중 2개를 x/y 축으로 골라
+    그 조합별 수익률·최종자산을 계산하는 통합 히트맵. `compute_profit_heatmap()`(gap x 수량)과
+    `compute_profit_heatmap2()`(gap x 이익gap)를 일반화한 버전이다.
+
+    이익 회수 로직은 축으로 선택되지 않았더라도 **항상 켜진 채로** 계산된다 — 축이 아닌
+    이익gap/이익회수율은 `fixed`에 담긴 고정값을 그대로 쓴다. (매매gap/매매수량이 축이 아닐
+    때도 마찬가지로 `fixed`의 고정값을 쓴다.)
+
+    Parameters
+    ----------
+    x_feature, y_feature : str
+        HEATMAP_FEATURES의 키 중 하나씩, 서로 달라야 한다 ("gap", "qty_pct", "profit_gap",
+        "profit_recover").
+    x_values, y_values : iterable[float]
+        각 축으로 스윕할 값 목록.
+    fixed : dict
+        x_feature/y_feature가 아닌 나머지 두 피쳐의 고정값. 예: x_feature="gap",
+        y_feature="qty_pct"라면 {"profit_gap": 100, "profit_recover": 100} 형태로 넘긴다.
+        (x_feature/y_feature에 해당하는 키가 fixed에 있어도 무시되고 x_values/y_values로
+        덮어써진다.)
+    capital : float, optional
+        수익률(%) 계산 기준이 되는 시작 자산. 지정하지 않으면 시작 자산
+        (initial_shares × 첫날 종가)을 그대로 사용한다.
+    no_sell, no_buy, allow_negative_cash : grid_trade_strategy() 참고
+
+    Returns
+    -------
+    dict
+        {
+            "x_feature": ..., "y_feature": ..., "xs": [...], "ys": [...],
+            "grid": [[y별 수익률(%), ...], ...],  # grid[i][j] = xs[i] x ys[j] 조합
+            "best": {"x":..., "y":..., "gap":..., "qty_pct":..., "qty":..., "profit_gap":...,
+                     "profit_recover":..., "profit_pct":..., "total":...,
+                     "매수횟수":..., "매도횟수":..., "이익회수횟수":...},
+            "worst": {...동일 구조...},
+            "top10": [...],  # 상위 10 (내림차순, 수익률 중복 제거)
+            "bottom10": [...],  # 하위 10 (오름차순, 수익률 중복 제거)
+            "ranked": [...],   # 전체 조합(중복 제거), max -> min 순
+            "raw_ranked": [...],  # 전체 조합(중복 미제거), max -> min 순
+            "initial_asset": 시작 자산,
+            "fixed": 실제로 적용된 고정값 dict (x_feature/y_feature 제외 2개),
+        }
+    """
+    if df.empty:
+        raise ValueError("데이터가 없습니다.")
+    if x_feature == y_feature:
+        raise ValueError("x축과 y축은 서로 다른 항목이어야 합니다.")
+    if x_feature not in HEATMAP_FEATURES or y_feature not in HEATMAP_FEATURES:
+        raise ValueError("알 수 없는 히트맵 축입니다.")
+
+    sorted_df = df.sort_values(date_col)
+    prices = sorted_df[price_col].tolist()
+
+    first_price = prices[0]
+    initial_asset = capital if capital is not None else initial_shares * first_price
+
+    xs = list(x_values)
+    ys = list(y_values)
+
+    grid = []
+    all_combos = []
+    best = {"x": None, "y": None, "profit_pct": float("-inf")}
+    worst = {"x": None, "y": None, "profit_pct": float("inf")}
+
+    for xv in xs:
+        row = []
+        for yv in ys:
+            # 4개 피쳐값을 확정: 이번 조합의 x/y 값 + 나머지 두 피쳐는 고정값.
+            params = dict(fixed)
+            params[x_feature] = xv
+            params[y_feature] = yv
+
+            resolved_qty = resolve_trade_qty(initial_shares, params["qty_pct"])
+            run_result = _run_grid_fast(
+                prices, sell_gap_percent=params["gap"], trade_qty=resolved_qty,
+                initial_shares=initial_shares,
+                no_sell=no_sell, no_buy=no_buy, allow_negative_cash=allow_negative_cash,
+                profit_gap_percent=params["profit_gap"],
+                profit_recover_percent=params["profit_recover"],
+                capital=initial_asset,
+            )
+            total = run_result["total"]
+            profit_pct = (total - initial_asset) / initial_asset * 100 if initial_asset else 0.0
+            row.append(profit_pct)
+            combo = {
+                "x": xv, "y": yv, "profit_pct": profit_pct, "total": total,
+                "gap": params["gap"], "qty_pct": params["qty_pct"], "qty": resolved_qty,
+                "profit_gap": params["profit_gap"], "profit_recover": params["profit_recover"],
+                "매수횟수": run_result["매수횟수"], "매도횟수": run_result["매도횟수"],
+                "이익회수횟수": run_result["이익회수횟수"],
+            }
+            all_combos.append(combo)
+            if profit_pct > best["profit_pct"]:
+                best = combo
+            if profit_pct < worst["profit_pct"]:
+                worst = combo
+        grid.append(row)
+
+    # top10/bottom10/ranked는 수익률이 같은 조합을 중복 제거한 뒤 뽑는다: 같은 수익률이면
+    # x가 가장 작은 조합을, x도 같으면 y가 가장 작은 조합을 남긴다. all_combos는
+    # x 오름차순(바깥 루프) -> y 오름차순(안쪽 루프) 순서로 쌓이므로, 특정 수익률이 처음
+    # 등장하는 조합이 곧 그 수익률 중 x 최소/y 최소 조합이다.
+    seen_profit_pct = set()
+    dedup_combos = []
+    for combo in all_combos:
+        key = round(combo["profit_pct"], 6)
+        if key in seen_profit_pct:
+            continue
+        seen_profit_pct.add(key)
+        dedup_combos.append(combo)
+
+    dedup_combos.sort(key=lambda c: c["profit_pct"], reverse=True)
+    top10 = dedup_combos[:10]
+    bottom10 = list(reversed(dedup_combos[-10:]))
+    ranked = dedup_combos
+    raw_ranked = sorted(all_combos, key=lambda c: c["profit_pct"], reverse=True)
+
+    return {
+        "x_feature": x_feature,
+        "y_feature": y_feature,
+        "xs": xs,
+        "ys": ys,
+        "grid": grid,
+        "best": best,
+        "worst": worst,
+        "top10": top10,
+        "bottom10": bottom10,
+        "ranked": ranked,
+        "raw_ranked": raw_ranked,
         "initial_asset": initial_asset,
+        "fixed": fixed,
     }
 
 
@@ -748,7 +1026,8 @@ def _main():
     parser.add_argument("--buy-gap", type=float, help="매수 gap(%%) (지정 안 하면 --gap과 동일)")
     parser.add_argument("--qty", type=int, default=1, help="매수/매도 주식 개수 (기본 1, --gap과 함께 사용)")
     parser.add_argument("--init-shares", type=int, default=100, help="시작 보유 주식 수 (기본 100)")
-    parser.add_argument("--sell-only", action="store_true", help="매도만 하고 매수는 하지 않음")
+    parser.add_argument("--no-sell", action="store_true", help="매도를 하지 않음")
+    parser.add_argument("--no-buy", action="store_true", help="매수를 하지 않음")
     parser.add_argument(
         "--allow-negative-cash", action="store_true",
         help="현금이 부족해도 거래수량 그대로 매수 (초창기 모델, 현금이 마이너스가 될 수 있음)",
@@ -782,7 +1061,8 @@ def _main():
             sell_gap_percent=args.gap,
             buy_gap_percent=args.buy_gap,
             initial_shares=args.init_shares,
-            sell_only=args.sell_only,
+            no_sell=args.no_sell,
+            no_buy=args.no_buy,
             allow_negative_cash=args.allow_negative_cash,
         )
         trade_log = result.pop("매매일지")
@@ -790,7 +1070,7 @@ def _main():
         print(
             f"\n[그리드 매매 백테스트] 매도gap={args.gap}%  매수gap={buy_gap_display}%  "
             f"거래수량={args.qty}  시작주식수={args.init_shares}  "
-            f"매도전용={args.sell_only}  현금마이너스허용={args.allow_negative_cash}"
+            f"매도안함={args.no_sell}  매수안함={args.no_buy}  현금마이너스허용={args.allow_negative_cash}"
         )
         for k, v in result.items():
             print(f"  {k}: {v:,.0f}" if isinstance(v, (int, float)) else f"  {k}: {v}")

@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>백테스트2 히트맵 — gap × 이익회수gap 수익률</title>
+<title>이익회수 히트맵 — gap × 이익회수gap 수익률</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
@@ -23,7 +23,7 @@
     margin: 0;
     padding: 32px 16px;
   }
-  .wrap { max-width: 920px; margin: 0 auto; }
+  .wrap { max-width: 1100px; margin: 0 auto; }
   .nav { margin-bottom: 16px; display: flex; gap: 16px; flex-wrap: wrap; }
   .nav a { color: var(--muted); text-decoration: none; font-size: 13px; }
   .nav a:hover { text-decoration: underline; }
@@ -43,6 +43,7 @@
   .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-size: 12px; color: var(--muted); }
+  .field .hint { font-weight: 400; color: var(--muted); }
   form select, form input {
     padding: 10px 12px;
     border: 1px solid var(--border);
@@ -187,12 +188,13 @@
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 20px;
   }
+  .rank-col { overflow-x: auto; }
   .rank-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
   .rank-title.up { color: var(--up); }
   .rank-title.down { color: var(--down); }
   .rank-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   .rank-table th, .rank-table td {
-    padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--border);
+    padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap;
   }
   .rank-table th:first-child, .rank-table td:first-child { text-align: left; color: var(--muted); }
   .rank-table th { color: var(--muted); font-weight: 600; }
@@ -219,6 +221,7 @@
   .ranked-scroll {
     max-height: 480px;
     overflow-y: auto;
+    overflow-x: auto;
     margin-top: 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -234,16 +237,19 @@
 <div class="wrap">
   <div class="nav">
     <a href="/">&larr; 메인(조회) 페이지</a>
-    <a href="/backtest">백테스트(수익 확인) 페이지</a>
-    <a href="/backtest2">백테스트2(이익 회수) 페이지</a>
-    <a href="/heatmap">🔥 gap×수량 히트맵 →</a>
+    <a href="/backtest">백테스트(수익 확인·이익 회수) 페이지</a>
+    <a href="/heatmap">🔥 gap × 수량 히트맵 →</a>
+    <a href="/heatmap3">🧭 통합 히트맵(축 선택) →</a>
   </div>
-  <h1>🔥🏦 백테스트2 히트맵 — gap × 이익회수gap</h1>
+  <h1>🔥🏦 이익회수 히트맵 — gap × 이익회수gap</h1>
   <p class="sub">
     매매 gap(%)과 이익 회수 gap(%)의 범위를 지정하면 그 조합별(1% 단위) 수익률을 한번에
-    계산합니다. 거래 수량과 이익 회수율은 아래에서 <b>고정 숫자</b>로 입력합니다.
+    계산합니다. 이익 회수 gap은 자본금(비우면 시작 자산) 대비 얼마를 벌었는지를 기준으로
+    판단하며, 수익률(%)도 이 자본금을 시작 자산으로 삼아 계산합니다. 거래 수량(%, 시작 보유
+    주식수 대비), 회수율, 자본금은 아래에서 <b>고정 숫자</b>로 입력합니다.
     저장된 로컬 CSV만 사용하므로 네이버에 다시 접속하지 않습니다.
-    각 칸을 클릭하면 그 조건 그대로 백테스트2 페이지로 이동해 매매/이익회수 일지를 볼 수 있습니다.
+    각 칸을 클릭하면 그 조건 그대로(이익 회수 사용 켠 상태로) 백테스트 페이지로 이동해
+    매매/이익회수 일지를 볼 수 있습니다.
   </p>
 
   {% if files %}
@@ -268,14 +274,20 @@
 
       <div class="field checkbox-field">
         <label>
-          <input type="checkbox" name="sell_only" value="on" {% if sell_only %}checked{% endif %}>
-          매도만 (매수 안 함)
+          <input type="checkbox" name="no_sell" value="on" {% if no_sell %}checked{% endif %}>
+          매도 안 함
+        </label>
+      </div>
+      <div class="field checkbox-field">
+        <label>
+          <input type="checkbox" name="no_buy" value="on" {% if no_buy %}checked{% endif %}>
+          매수 안 함
         </label>
       </div>
       <div class="field checkbox-field">
         <label>
           <input type="checkbox" name="allow_negative_cash" value="on" {% if allow_negative_cash %}checked{% endif %}>
-          현금 마이너스 허용
+          현금 부족해도 매수
         </label>
       </div>
     </div>
@@ -304,11 +316,15 @@
         <label for="init_shares">시작 보유 주식수</label>
         <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
       </div>
+      <div class="field">
+        <label for="capital">자본금 <span class="hint">비우면 시작 자산</span></label>
+        <input type="number" name="capital" id="capital" step="1" min="0" value="{{ capital }}" placeholder="시작 자산">
+      </div>
       <div class="field-group">
         <span class="group-label">🏦 고정값</span>
         <div class="field">
-          <label for="qty">거래 수량 (주)</label>
-          <input type="number" name="qty" id="qty" min="1" value="{{ qty }}" required>
+          <label for="qty_pct">거래 수량 (%) <span class="hint">시작 보유 주식수 대비</span></label>
+          <input type="number" name="qty_pct" id="qty_pct" step="0.1" min="0.1" value="{{ qty_pct }}" required>
         </div>
         <div class="field">
           <label for="profit_recover">회수율 (%)</label>
@@ -350,7 +366,8 @@
     groupSelect.addEventListener('change', () => populateDateSelect(groupSelect.value, null));
     dateSelect.addEventListener('change', () => { fileInput.value = dateSelect.value; });
 
-    const preselected = "{{ selected_file }}";
+    // 기존 선택값(재조회/폼 재제출 시)이 있으면 그걸, 없으면 가장 최근에 생성된 CSV를 기본값으로 복원
+    const preselected = "{{ selected_file }}" || "{{ default_file }}";
     if (preselected) {
       const parts = preselected.match(/^(\d+)_(\d+)days_/);
       if (parts) {
@@ -381,7 +398,7 @@
   {% if cells %}
     <div class="card">
       <h2>
-        {{ code }} — 시작 {{ init_shares }}주 / 거래수량 {{ qty }}주 / 회수율 {{ profit_recover }}%
+        {{ code }} — 시작 {{ "{:,}".format(init_shares|int) }}주 / 거래수량 {{ qty_pct }}% ({{ "{:,}".format(qty) }}주) / 자본금 {{ "{:,.0f}".format(capital_used) }} / 회수율 {{ profit_recover }}%
         ({{ days }}일 데이터, {{ created_display }} 조회분)
       </h2>
       <div class="callout-grid">
@@ -488,7 +505,7 @@
         <summary>전체 수익률 보기 (max → min, {{ ranked|length }}개, 중복 수익률 제거)</summary>
         <div class="ranked-scroll">
           <table class="rank-table">
-            <thead><tr><th>#</th><th>gap</th><th>이익gap</th><th>매수</th><th>매도</th><th>회수</th><th>수익률</th></tr></thead>
+            <thead><tr><th>#</th><th>gap</th><th>이익gap</th><th>매수</th><th>매도</th><th>회수</th><th>수익률</th><th>최종자산</th></tr></thead>
             <tbody>
               {% for c in ranked %}
               <tr class="{{ 'best-row' if loop.index == 1 }}{{ ' worst-row' if loop.index == ranked|length }}">
@@ -499,6 +516,7 @@
                 <td><a href="{{ c.link }}">{{ c['매도횟수'] }}</a></td>
                 <td><a href="{{ c.link }}">{{ c['이익회수횟수'] }}</a></td>
                 <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
               </tr>
               {% endfor %}
             </tbody>
