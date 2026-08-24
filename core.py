@@ -761,6 +761,359 @@ def _run_daily_fast(
     )
 
 
+def _simulate_daily_gap(
+    prices: list,
+    dates,
+    trade_qty: int,
+    gap_percent: float,
+    initial_shares: int,
+    no_sell: bool = False,
+    no_buy: bool = False,
+    record_log: bool = False,
+) -> dict:
+    """
+    "일별 매매 2" 전략의 실제 시뮬레이션 루프 (트레일링 고점/저점 방식).
+    daily_gap_strategy()와 _run_daily_gap_fast() 둘 다 이 함수를 사용해서 로직이 어긋나지
+    않게 한다.
+
+    규칙 (grid_trade_strategy()의 매도/매수를 서로 바꾼 형태 — 자세한 설명은
+    daily_gap_strategy() 참고)
+    ----
+    - max/min은 첫날 종가로 시작하고, 주가가 새 고점/저점을 찍을 때마다 계속 갱신된다
+      (매매 발생 여부와 무관).
+    - **매수**: 현재가가 max에서 gap% 만큼 떨어지면 매수하고 max를 그 매수가로 리셋한다.
+      단, 전날보다 가격이 내려간 날에만 매수한다. no_buy=True면 매수 자체를 하지 않는다
+      (이 경우 max는 상시 갱신만 되고 매수 시 리셋은 일어나지 않는다).
+    - **매도**: 현재가가 min에서 gap% 만큼 오르면 매도하고 min을 그 매도가로 리셋한다.
+      단, 전날보다 가격이 올라간 날에만 매도한다. no_sell=True면 매도 자체를 하지 않는다
+      (min도 마찬가지로 상시 갱신만 된다).
+
+    record_log : True면 매매일지/자산추이를 기록해서 반환한다 (느림). False면 최종 결과만
+        계산한다 (빠름, 히트맵처럼 수천 번 반복 계산할 때 사용).
+    """
+    gap_ratio = gap_percent / 100.0
+    max_price = min_price = prices[0]
+    shares = initial_shares
+    cash = 0.0
+    sell_count = 0
+    buy_count = 0
+    trade_log = [] if record_log else None
+    asset_log = [] if record_log else None
+
+    if record_log:
+        asset_log.append({
+            "날짜": dates[0], "주가": prices[0], "현금": cash, "보유주식수": shares,
+            "주식평가금액": prices[0] * shares, "total": prices[0] * shares + cash,
+        })
+
+    prev_price = prices[0]
+    for i in range(1, len(prices)):
+        price = prices[i]
+        date = dates[i] if dates is not None else None
+
+        # 최근 고점/저점 상시 갱신 (매매 발생 여부와 무관)
+        if price > max_price:
+            max_price = price
+        if price < min_price:
+            min_price = price
+
+        # 이번 판단에 쓰인 max/min 스냅샷 (리셋되기 전 값)
+        max_snapshot = max_price
+        min_snapshot = min_price
+
+        # 매수: max 대비 gap% 하락, 단 전날보다 내려간 날에만 (no_buy면 아예 건너뜀)
+        if (not no_buy) and price <= max_snapshot * (1 - gap_ratio) and price < prev_price:
+            affordable_qty = int(cash // price) if price > 0 else 0
+            buy_qty = min(trade_qty, affordable_qty)
+
+            # 매수 신호가 뜨면 실제로 살 수 있었는지와 무관하게 max를 갱신한다.
+            # 그래야 현금 부족으로 못 산 경우, 오래된 고점 기준이 계속 남아
+            # 이후 아주 작은 하락에도 매수 조건이 계속 참이 되는 것을 막을 수 있다.
+            max_price = price
+            if buy_qty > 0:
+                shares += buy_qty
+                cash -= buy_qty * price
+                buy_count += 1
+                if record_log:
+                    hold_only_asset = initial_shares * price
+                    trade_log.append({
+                        "날짜": date, "구분": "매수", "가격": price, "수량": buy_qty,
+                        "현금잔고": cash, "보유주식수": shares, "주식평가금액": price * shares,
+                        "max": max_snapshot, "min": min_snapshot,
+                        "등락률": (price - max_snapshot) / max_snapshot * 100,
+                        "매매안했을때자산": hold_only_asset,
+                        "차이": (price * shares + cash) - hold_only_asset,
+                    })
+
+        # 매도: min 대비 gap% 상승, 단 전날보다 올라간 날에만 (no_sell이면 아예 건너뜀)
+        if (
+            not no_sell
+            and price >= min_snapshot * (1 + gap_ratio)
+            and price > prev_price
+            and shares >= trade_qty
+        ):
+            shares -= trade_qty
+            cash += trade_qty * price
+            min_price = price
+            sell_count += 1
+            if record_log:
+                hold_only_asset = initial_shares * price
+                trade_log.append({
+                    "날짜": date, "구분": "매도", "가격": price, "수량": trade_qty,
+                    "현금잔고": cash, "보유주식수": shares, "주식평가금액": price * shares,
+                    "max": max_snapshot, "min": min_snapshot,
+                    "등락률": (price - min_snapshot) / min_snapshot * 100,
+                    "매매안했을때자산": hold_only_asset,
+                    "차이": (price * shares + cash) - hold_only_asset,
+                })
+
+        if record_log:
+            asset_log.append({
+                "날짜": date, "주가": price, "현금": cash, "보유주식수": shares,
+                "주식평가금액": price * shares, "total": price * shares + cash,
+            })
+        prev_price = price
+
+    final_price = prices[-1]
+    stock_value = shares * final_price
+
+    return {
+        "주가": final_price,
+        "보유주식수": shares,
+        "주식_평가금액": stock_value,
+        "현금": cash,
+        "total": stock_value + cash,
+        "매도횟수": sell_count,
+        "매수횟수": buy_count,
+        "매매일지": trade_log if record_log else [],
+        "자산추이": asset_log if record_log else [],
+    }
+
+
+def daily_gap_strategy(
+    df: pd.DataFrame,
+    trade_qty: int,
+    gap_percent: float,
+    initial_shares: int = 100,
+    no_sell: bool = False,
+    no_buy: bool = False,
+    price_col: str = "종가",
+    date_col: str = "날짜",
+) -> dict:
+    """
+    "일별 매매 2" 전략 — 트레일링 고점(max)/저점(min) 기준. max, min은 첫날 종가로 시작해서
+    새 고점/저점을 찍을 때마다 계속 갱신된다 (매매 발생 여부와 무관). grid_trade_strategy()와
+    똑같은 트레일링 구조지만 **매도/매수가 서로 뒤바뀌어 있다**: max에서 떨어지면 매도가
+    아니라 매수, min에서 오르면 매수가 아니라 매도한다.
+
+    규칙
+    ----
+    - **매수**: 현재가가 max에서 gap_percent% 만큼 떨어지면 매수를 시도한다. "쌓인 현금으로
+      살 수 있는 만큼"과 trade_qty 중 작은 값만큼만 매수한다 (현금 마이너스 허용 안 함).
+      매수 후(또는 매수 신호만 뜨고 현금 부족으로 못 샀어도) max를 그 시점 가격으로 리셋한다.
+      단, **전날보다 가격이 내려간 날에만** 매수한다.
+    - **매도**: 현재가가 min에서 gap_percent% 만큼 오르면 trade_qty만큼 매도한다. 단, 보유
+      주식수가 trade_qty보다 적으면 매도하지 않는다 (공매도 없음). 매도 후 min을 그 매도가로
+      리셋한다. 단, **전날보다 가격이 올라간 날에만** 매도한다.
+    - 전날 대비 상승/하락 조건 덕분에 하루에 매도와 매수가 동시에 발생하는 일은 없다
+      (grid_trade_strategy()와 같은 이유).
+    - 매도/매수 수량이 trade_qty 하나로 공유된다 (daily_reversal_strategy()는 매도/매수
+      수량을 독립적으로 지정할 수 있었던 것과 다르다).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        get_stock_data()로 얻은 일별 시세. 날짜 오름차순/내림차순 상관없이 내부에서 정렬함.
+    trade_qty : int
+        매도/매수 공통 거래 수량 (보통 resolve_trade_qty()로 시작 보유 주식수 대비 %에서
+        계산해서 넘긴다).
+    gap_percent : float
+        매매를 촉발하는 트레일링 고점/저점 대비 등락폭(%) 임계값. 예: 3 -> 고점 대비 3%
+        하락하면 매수, 저점 대비 3% 상승하면 매도.
+    initial_shares : int
+        시작 보유 주식 수 (기본 100)
+    no_sell : bool
+        True면 매도를 하지 않는다 (매수는 정상 동작, 기본 False)
+    no_buy : bool
+        True면 매수를 하지 않는다 (매도는 정상 동작, 기본 False)
+    price_col : str
+        기준으로 삼을 가격 컬럼명 (기본 '종가')
+    date_col : str
+        날짜 컬럼명 (기본 '날짜'), 매매일지에 사용
+
+    Returns
+    -------
+    dict
+        {
+            "주가": 마지막 날 가격,
+            "보유주식수": 최종 보유 주식 수,
+            "주식_평가금액": 보유주식수 * 마지막 날 가격,
+            "현금": 최종 현금,
+            "total": 주식_평가금액 + 현금,
+            "매도횟수": ...,
+            "매수횟수": ...,
+            "매매일지": [{"날짜":..., "구분":"매도/매수", "가격":..., "수량":...,
+                       "현금잔고":..., "보유주식수":..., "주식평가금액":...,
+                       "max": 그 거래를 판단할 때 쓰인 고점 스냅샷,
+                       "min": 그 거래를 판단할 때 쓰인 저점 스냅샷,
+                       "등락률": 매수는 (가격-max)/max*100, 매도는 (가격-min)/min*100,
+                       "매매안했을때자산": initial_shares * 그날 가격,
+                       "차이": (주식평가금액+현금잔고) - 매매안했을때자산}, ...],
+            "자산추이": [{"날짜":..., "주가":..., "현금":..., "보유주식수":...,
+                       "주식평가금액":..., "total":...}, ...],
+                # 첫날부터 마지막 날까지 매일의 스냅샷 (거래 발생 여부와 무관, 그래프용).
+        }
+    """
+    if df.empty:
+        raise ValueError("데이터가 없습니다.")
+    if gap_percent <= 0:
+        raise ValueError("등락폭 gap은 0보다 커야 합니다.")
+
+    sorted_df = df.sort_values(date_col).reset_index(drop=True)
+    dates = sorted_df[date_col].tolist()
+    prices = sorted_df[price_col].tolist()
+
+    return _simulate_daily_gap(
+        prices, dates, trade_qty, gap_percent, initial_shares,
+        no_sell=no_sell, no_buy=no_buy, record_log=True,
+    )
+
+
+def _run_daily_gap_fast(
+    prices: list,
+    trade_qty: int,
+    gap_percent: float,
+    initial_shares: int = 100,
+    no_sell: bool = False,
+    no_buy: bool = False,
+) -> dict:
+    """
+    daily_gap_strategy()와 완전히 동일한 로직이지만, 매매일지를 기록하지 않아 수천 번
+    반복 계산(히트맵용)할 때 빠르게 동작한다.
+    """
+    return _simulate_daily_gap(
+        prices, None, trade_qty, gap_percent, initial_shares,
+        no_sell=no_sell, no_buy=no_buy, record_log=False,
+    )
+
+
+def compute_daily_gap_heatmap(
+    df: pd.DataFrame,
+    gap_values,
+    qty_percent_values,
+    initial_shares: int = 100,
+    price_col: str = "종가",
+    date_col: str = "날짜",
+    no_sell: bool = False,
+    no_buy: bool = False,
+) -> dict:
+    """
+    daily_gap_strategy() 전용 히트맵: 등락폭 gap(%) x 매매수량(%) 조합별 최종 수익률(%)을
+    계산한다. 매매수량은 시작 보유 주식수 대비 비율로, resolve_trade_qty()로 절대 수량으로
+    변환한 뒤 스윕한다 (매도/매수 공통 수량).
+
+    Parameters
+    ----------
+    gap_values : iterable[float]
+        등락폭 gap(%) 값 목록 (예: range(1, 51) -> 1~50%)
+    qty_percent_values : iterable[float]
+        매매 수량 비율(%) 값 목록 (예: range(1, 51) -> 시작 보유 주식수의 1~50%)
+    no_sell, no_buy : daily_gap_strategy() 참고
+
+    Returns
+    -------
+    dict
+        {
+            "gaps": [...], "qty_pcts": [...],
+            "grid": [[qty%별 수익률(%), ...], ...]  # grid[i][j] = gaps[i] x qty_pcts[j] 조합
+            "best": {"gap":..., "qty_pct":..., "qty":..., "profit_pct":..., "total":...},
+            "worst": {"gap":..., "qty_pct":..., "qty":..., "profit_pct":..., "total":...},
+            "top10": [{"gap":..., "qty_pct":..., "qty":..., "profit_pct":..., "total":...,
+                       "매수횟수":..., "매도횟수":...}, ...],  # 상위 10 (내림차순)
+            "bottom10": [...],  # 하위 10 (오름차순)
+            "ranked": [...],   # 전체 조합(중복 제거), max -> min 순
+            "raw_ranked": [...],  # 전체 조합(중복 미제거), max -> min 순
+            "initial_asset": 시작 자산,
+            "hold_only_asset": 매매 안 했을 때 최종 자산,
+        }
+
+    top10/bottom10/ranked는 수익률이 같은 조합이 여러 개면 그중 하나만 남긴다(중복 제거).
+    남기는 기준: gap이 가장 작은 조합 우선, gap도 같으면 수량비율이 가장 작은 조합.
+    (grid 전체, best/worst, raw_ranked에는 중복 제거를 적용하지 않는다.)
+    """
+    if df.empty:
+        raise ValueError("데이터가 없습니다.")
+
+    sorted_df = df.sort_values(date_col)
+    prices = sorted_df[price_col].tolist()
+
+    first_price = prices[0]
+    initial_asset = initial_shares * first_price
+    hold_only_asset = initial_shares * prices[-1]
+
+    gaps = list(gap_values)
+    qty_pcts = list(qty_percent_values)
+
+    grid = []
+    all_combos = []
+    best = {"gap": None, "qty_pct": None, "qty": None, "profit_pct": float("-inf")}
+    worst = {"gap": None, "qty_pct": None, "qty": None, "profit_pct": float("inf")}
+
+    for g in gaps:
+        row = []
+        for qp in qty_pcts:
+            resolved_qty = resolve_trade_qty(initial_shares, qp)
+            run_result = _run_daily_gap_fast(
+                prices, trade_qty=resolved_qty, gap_percent=g, initial_shares=initial_shares,
+                no_sell=no_sell, no_buy=no_buy,
+            )
+            total = run_result["total"]
+            profit_pct = (total - initial_asset) / initial_asset * 100 if initial_asset else 0.0
+            row.append(profit_pct)
+            combo = {
+                "gap": g, "qty_pct": qp, "qty": resolved_qty, "profit_pct": profit_pct, "total": total,
+                "매매안했을때자산": hold_only_asset, "차이": total - hold_only_asset,
+                "매수횟수": run_result["매수횟수"], "매도횟수": run_result["매도횟수"],
+            }
+            all_combos.append(combo)
+            if profit_pct > best["profit_pct"]:
+                best = combo
+            if profit_pct < worst["profit_pct"]:
+                worst = combo
+        grid.append(row)
+
+    # top10/bottom10/ranked는 수익률이 같은 조합을 중복 제거한 뒤 뽑는다: 같은 수익률이면
+    # gap이 가장 작은 조합을, gap도 같으면 수량비율이 가장 작은 조합을 남긴다.
+    seen_profit_pct = set()
+    dedup_combos = []
+    for combo in all_combos:
+        key = round(combo["profit_pct"], 6)
+        if key in seen_profit_pct:
+            continue
+        seen_profit_pct.add(key)
+        dedup_combos.append(combo)
+
+    dedup_combos.sort(key=lambda c: c["profit_pct"], reverse=True)
+    top10 = dedup_combos[:10]
+    bottom10 = list(reversed(dedup_combos[-10:]))
+    ranked = dedup_combos
+    raw_ranked = sorted(all_combos, key=lambda c: c["profit_pct"], reverse=True)
+
+    return {
+        "gaps": gaps,
+        "qty_pcts": qty_pcts,
+        "grid": grid,
+        "best": best,
+        "worst": worst,
+        "top10": top10,
+        "bottom10": bottom10,
+        "ranked": ranked,
+        "raw_ranked": raw_ranked,
+        "initial_asset": initial_asset,
+        "hold_only_asset": hold_only_asset,
+    }
+
+
 def compute_daily_heatmap(
     df: pd.DataFrame,
     sell_qty_pct_values,

@@ -18,6 +18,7 @@ from flask import Flask, render_template, request, Response
 from core import (
     get_stock_data, get_stock_name, grid_trade_strategy, resolve_trade_qty,
     daily_reversal_strategy, compute_daily_heatmap,
+    daily_gap_strategy, compute_daily_gap_heatmap,
     compute_profit_heatmap, compute_profit_heatmap2, compute_profit_heatmap_2d,
     HEATMAP_FEATURES, SISE_DAY_URL,
 )
@@ -169,6 +170,21 @@ def _build_daily_link(
     if sell_above_start_asset_only:
         params["sell_above_start_asset_only"] = "on"
     return f"/daily?{urlencode(params)}"
+
+
+def _build_daily2_link(selected_file, gap_pct, qty_pct, init_shares, no_sell=False, no_buy=False):
+    """히트맵5 셀·요약 클릭 시 그 조건 그대로 /daily2 페이지로 이동하는 링크를 만든다."""
+    params = {
+        "file": selected_file,
+        "gap_pct": gap_pct,
+        "qty_pct": qty_pct,
+        "init_shares": init_shares,
+    }
+    if no_sell:
+        params["no_sell"] = "on"
+    if no_buy:
+        params["no_buy"] = "on"
+    return f"/daily2?{urlencode(params)}"
 
 
 @app.route("/", methods=["GET"])
@@ -615,6 +631,148 @@ def daily():
             context["error"] = f"백테스트 계산 중 오류가 발생했습니다: {e}"
 
     return render_template("daily.html", **context)
+
+
+@app.route("/daily2", methods=["GET"])
+def daily2():
+    """
+    "일별 매매 2" 백테스트 페이지. 트레일링 고점(max)/저점(min) 기준으로, max에서 gap%
+    떨어지면 매수, min에서 gap% 오르면 매도한다 (grid_trade_strategy()와 매도/매수가
+    서로 뒤바뀐 구조). 매도/매수 수량은 하나의 값(시작 보유 주식수 대비 %)을 공유한다.
+    변수는 gap%와 수량% 딱 2개뿐이다.
+    """
+    files = _list_local_csvs()
+    groups = _grouped_local_csvs(files)
+    default_file = _most_recent_file(files)
+
+    selected_file = request.args.get("file", "").strip()
+    gap_pct = request.args.get("gap_pct", "3").strip()
+    qty_pct = request.args.get("qty_pct", "10").strip()
+    init_shares = request.args.get("init_shares", "100").strip()
+    no_sell = request.args.get("no_sell") == "on"
+    no_buy = request.args.get("no_buy") == "on"
+
+    context = {
+        "active": "daily2",
+        "files": files,
+        "groups": groups,
+        "selected_file": selected_file,
+        "default_file": default_file,
+        "gap_pct": gap_pct,
+        "qty_pct": qty_pct,
+        "init_shares": init_shares,
+        "no_sell": no_sell,
+        "no_buy": no_buy,
+        "error": None,
+        "summary": None,
+        "trade_log": None,
+        "qty": None,
+        "initial_asset": None,
+        "hold_only_asset": None,
+        "vs_hold": None,
+        "profit": None,
+        "profit_pct": None,
+        "code": None,
+        "days": None,
+        "created_display": None,
+        "chart_labels": None,
+        "chart_prices": None,
+        "chart_sell_points": None,
+        "chart_buy_points": None,
+        "chart_total": None,
+        "chart_stock_value": None,
+        "chart_cash": None,
+        "chart_hold_only": None,
+    }
+
+    if selected_file:
+        path = os.path.join(DATA_DIR, selected_file)
+        m = _CSV_NAME_RE.match(selected_file)
+
+        if not m or not os.path.isfile(path):
+            context["error"] = "선택한 파일을 찾을 수 없습니다. 메인 페이지에서 먼저 종목을 조회해주세요."
+            return render_template("daily2.html", **context)
+
+        context["code"] = m.group(1)
+        context["days"] = m.group(2)
+        created = m.group(3)
+        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
+
+        try:
+            gap_pct_f = float(gap_pct)
+            qty_pct_f = float(qty_pct)
+            init_i = int(init_shares)
+            if gap_pct_f <= 0:
+                raise ValueError("등락폭 gap(%)은 0보다 커야 합니다.")
+            if qty_pct_f <= 0:
+                raise ValueError("매수/매도 수량(%)은 0보다 커야 합니다.")
+            if init_i < 0:
+                raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+
+            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            if df.empty:
+                raise ValueError("CSV에 데이터가 없습니다.")
+
+            qty_i = resolve_trade_qty(init_i, qty_pct_f)
+            context["qty"] = qty_i
+
+            result = daily_gap_strategy(
+                df, trade_qty=qty_i, gap_percent=gap_pct_f, initial_shares=init_i,
+                no_sell=no_sell, no_buy=no_buy,
+            )
+
+            trade_log = result.pop("매매일지")
+            for row in trade_log:
+                row["날짜"] = pd.Timestamp(row["날짜"]).strftime("%Y-%m-%d")
+
+            asset_log = result.pop("자산추이")
+
+            sorted_df = df.sort_values("날짜")
+            chart_labels = sorted_df["날짜"].dt.strftime("%Y-%m-%d").tolist()
+            chart_prices = sorted_df["종가"].tolist()
+            chart_sell_points = [
+                {"x": row["날짜"], "y": row["가격"]} for row in trade_log if row["구분"] == "매도"
+            ]
+            chart_buy_points = [
+                {"x": row["날짜"], "y": row["가격"]} for row in trade_log if row["구분"] == "매수"
+            ]
+            chart_total = [row["total"] for row in asset_log]
+            chart_stock_value = [row["주식평가금액"] for row in asset_log]
+            chart_cash = [row["현금"] for row in asset_log]
+            chart_hold_only = [row["주가"] * init_i for row in asset_log]
+
+            first_price = float(df.sort_values("날짜")["종가"].iloc[0])
+            initial_asset = init_i * first_price
+
+            hold_only_asset = init_i * result["주가"]  # 매매 없이 그냥 들고만 있었을 때 최종 자산
+
+            profit = result["total"] - initial_asset
+            profit_pct = (profit / initial_asset * 100) if initial_asset else 0.0
+
+            vs_hold = result["total"] - hold_only_asset
+
+            context["summary"] = result
+            context["initial_asset"] = initial_asset
+            context["hold_only_asset"] = hold_only_asset
+            context["vs_hold"] = vs_hold
+            context["profit"] = profit
+            context["profit_pct"] = profit_pct
+            context["trade_log"] = trade_log
+            context["chart_labels"] = chart_labels
+            context["chart_prices"] = chart_prices
+            context["chart_sell_points"] = chart_sell_points
+            context["chart_buy_points"] = chart_buy_points
+            context["chart_total"] = chart_total
+            context["chart_stock_value"] = chart_stock_value
+            context["chart_cash"] = chart_cash
+            context["chart_hold_only"] = chart_hold_only
+
+        except ValueError as e:
+            context["error"] = f"입력 오류: {e}"
+        except Exception as e:
+            context["error"] = f"백테스트 계산 중 오류가 발생했습니다: {e}"
+
+    return render_template("daily2.html", **context)
 
 
 @app.route("/heatmap", methods=["GET"])
@@ -1307,6 +1465,151 @@ def heatmap4():
             context["error"] = f"히트맵 계산 중 오류가 발생했습니다: {e}"
 
     return render_template("heatmap4.html", **context)
+
+
+@app.route("/heatmap5", methods=["GET"])
+def heatmap5():
+    """
+    daily_gap_strategy() 전용 히트맵: 등락폭 gap% 1~50% x 매매수량% 1~50%(둘 다 1% 단위,
+    시작 보유 주식수 대비) = 2,500가지 조합의 수익률을 계산해 히트맵으로 보여준다.
+    저장된 로컬 CSV만 사용 (네이버 재접속 없음).
+    """
+    files = _list_local_csvs()
+    groups = _grouped_local_csvs(files)
+    default_file = _most_recent_file(files)
+
+    selected_file = request.args.get("file", "").strip()
+    init_shares = request.args.get("init_shares", "100").strip()
+    no_sell = request.args.get("no_sell") == "on"
+    no_buy = request.args.get("no_buy") == "on"
+    gap_pct_min = request.args.get("gap_pct_min", "1").strip()
+    gap_pct_max = request.args.get("gap_pct_max", "50").strip()
+    qty_pct_min = request.args.get("qty_pct_min", "1").strip()
+    qty_pct_max = request.args.get("qty_pct_max", "50").strip()
+
+    context = {
+        "active": "heatmap5",
+        "files": files,
+        "groups": groups,
+        "selected_file": selected_file,
+        "default_file": default_file,
+        "init_shares": init_shares,
+        "no_sell": no_sell,
+        "no_buy": no_buy,
+        "gap_pct_min": gap_pct_min,
+        "gap_pct_max": gap_pct_max,
+        "qty_pct_min": qty_pct_min,
+        "qty_pct_max": qty_pct_max,
+        "error": None,
+        "code": None,
+        "days": None,
+        "created_display": None,
+        "gaps": None,
+        "qty_pcts": None,
+        "cells": None,
+        "best": None,
+        "worst": None,
+        "best_link": None,
+        "worst_link": None,
+        "top10": None,
+        "bottom10": None,
+        "ranked": None,
+        "ranked_raw": None,
+        "initial_asset": None,
+        "hold_only_asset": None,
+    }
+
+    if selected_file:
+        path = os.path.join(DATA_DIR, selected_file)
+        m = _CSV_NAME_RE.match(selected_file)
+
+        if not m or not os.path.isfile(path):
+            context["error"] = "선택한 파일을 찾을 수 없습니다. 메인 페이지에서 먼저 종목을 조회해주세요."
+            return render_template("heatmap5.html", **context)
+
+        context["code"] = m.group(1)
+        context["days"] = m.group(2)
+        created = m.group(3)
+        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
+
+        try:
+            init_i = int(init_shares)
+            if init_i < 0:
+                raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+
+            gap_min_i = int(gap_pct_min)
+            gap_max_i = int(gap_pct_max)
+            qty_min_i = int(qty_pct_min)
+            qty_max_i = int(qty_pct_max)
+            if gap_min_i < 1 or qty_min_i < 1:
+                raise ValueError("gap/수량 하한은 1 이상이어야 합니다.")
+            if gap_max_i < gap_min_i:
+                raise ValueError("gap 상한은 하한보다 크거나 같아야 합니다.")
+            if qty_max_i < qty_min_i:
+                raise ValueError("수량 상한은 하한보다 크거나 같아야 합니다.")
+
+            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            if df.empty:
+                raise ValueError("CSV에 데이터가 없습니다.")
+
+            gap_values = range(gap_min_i, gap_max_i + 1)  # 1% 단위
+            qty_percent_values = range(qty_min_i, qty_max_i + 1)  # 시작 보유 주식수 대비 1% 단위
+
+            result = compute_daily_gap_heatmap(
+                df, gap_values, qty_percent_values, initial_shares=init_i,
+                no_sell=no_sell, no_buy=no_buy,
+            )
+
+            vmax = max(abs(result["best"]["profit_pct"]), abs(result["worst"]["profit_pct"]), 1e-9)
+
+            cells = []
+            for gi, g in enumerate(result["gaps"]):
+                for qi, qp in enumerate(result["qty_pcts"]):
+                    pct = result["grid"][gi][qi]
+                    is_best = (g == result["best"]["gap"] and qp == result["best"]["qty_pct"])
+                    is_worst = (g == result["worst"]["gap"] and qp == result["worst"]["qty_pct"])
+                    cells.append({
+                        "gap": g, "qty_pct": qp, "pct": pct,
+                        "total": result["initial_asset"] * (1 + pct / 100),
+                        "color": _profit_color(pct, vmax),
+                        "link": _build_daily2_link(selected_file, g, qp, init_i, no_sell, no_buy),
+                        "is_best": is_best,
+                        "is_worst": is_worst,
+                    })
+
+            context["gaps"] = result["gaps"]
+            context["qty_pcts"] = result["qty_pcts"]
+            context["cells"] = cells
+            context["best"] = result["best"]
+            context["worst"] = result["worst"]
+            context["initial_asset"] = result["initial_asset"]
+            context["hold_only_asset"] = result["hold_only_asset"]
+            context["best_link"] = _build_daily2_link(
+                selected_file, result["best"]["gap"], result["best"]["qty_pct"], init_i, no_sell, no_buy
+            )
+            context["worst_link"] = _build_daily2_link(
+                selected_file, result["worst"]["gap"], result["worst"]["qty_pct"], init_i, no_sell, no_buy
+            )
+
+            def _with_link(combo):
+                return {
+                    **combo,
+                    "link": _build_daily2_link(
+                        selected_file, combo["gap"], combo["qty_pct"], init_i, no_sell, no_buy
+                    ),
+                }
+
+            context["top10"] = [_with_link(c) for c in result["top10"]]
+            context["bottom10"] = [_with_link(c) for c in result["bottom10"]]
+            context["ranked"] = [_with_link(c) for c in result["ranked"]]
+            context["ranked_raw"] = result["raw_ranked"]  # 순위별 수익률 그래프의 "중복 제거 off" 데이터 (링크 불필요)
+
+        except ValueError as e:
+            context["error"] = f"입력 오류: {e}"
+        except Exception as e:
+            context["error"] = f"히트맵 계산 중 오류가 발생했습니다: {e}"
+
+    return render_template("heatmap5.html", **context)
 
 
 if __name__ == "__main__":
