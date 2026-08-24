@@ -24,9 +24,39 @@
     padding: 32px 16px;
   }
   .wrap { max-width: 1150px; margin: 0 auto; }
-  .nav { margin-bottom: 16px; display: flex; gap: 16px; flex-wrap: wrap; }
-  .nav a { color: var(--muted); text-decoration: none; font-size: 13px; }
-  .nav a:hover { text-decoration: underline; }
+  .nav {
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .nav .nav-home { color: #2a6fd6; text-decoration: none; font-weight: 600; }
+  .nav .nav-home:hover { text-decoration: underline; }
+  .nav .nav-home.active { color: var(--text); text-decoration: underline; }
+  .nav .nav-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 14px 5px 12px;
+  }
+  .nav .nav-group-label {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding-right: 8px;
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .nav .nav-group a { color: #2a6fd6; text-decoration: none; white-space: nowrap; }
+  .nav .nav-group a:hover { text-decoration: underline; }
+  .nav .nav-group a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
   h1 { font-size: 22px; margin-bottom: 4px; }
   p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; }
 
@@ -240,12 +270,7 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="nav">
-    <a href="/">&larr; 메인(조회) 페이지</a>
-    <a href="/backtest">백테스트(수익 확인·이익 회수) 페이지</a>
-    <a href="/heatmap">🔥 gap × 수량 히트맵</a>
-    <a href="/heatmap2">🏦 이익회수 히트맵</a>
-  </div>
+  {% include "_nav.html" %}
   <h1>🧭 통합 히트맵 — 축 선택형</h1>
   <p class="sub">
     주가gap · 매매수량 · 이익gap · 이익회수율 4개 중 2개를 골라 X축/Y축으로 스윕합니다.
@@ -264,7 +289,7 @@
         <select id="group_select" required>
           <option value="">선택하세요</option>
           {% for g in groups %}
-          <option value="{{ g.code }}_{{ g.days }}">{{ g.code }} ({{ g.days }}일)</option>
+          <option value="{{ g.code }}">{{ g.code }}</option>
           {% endfor %}
         </select>
       </div>
@@ -382,9 +407,10 @@
   </form>
 
   <script>
+    // 종목코드 -> [{filename, created_display, days}, ...] 매핑 (생성일자 최신순 정렬됨)
     const CSV_GROUPS = {{ groups | tojson }};
     const groupMap = {};
-    CSV_GROUPS.forEach(g => { groupMap[g.code + '_' + g.days] = g.items; });
+    CSV_GROUPS.forEach(g => { groupMap[g.code] = g.items; });
 
     const groupSelect = document.getElementById('group_select');
     const dateSelect = document.getElementById('date_select');
@@ -402,7 +428,7 @@
       items.forEach(item => {
         const opt = document.createElement('option');
         opt.value = item.filename;
-        opt.textContent = item.created_display;
+        opt.textContent = item.created_display + ' (' + item.days + '일)';
         if (item.filename === preselectFilename) opt.selected = true;
         dateSelect.appendChild(opt);
       });
@@ -415,9 +441,9 @@
     // 기존 선택값(재조회/폼 재제출 시)이 있으면 그걸, 없으면 가장 최근에 생성된 CSV를 기본값으로 복원
     const preselected = "{{ selected_file }}" || "{{ default_file }}";
     if (preselected) {
-      const parts = preselected.match(/^(\d+)_(\d+)days_/);
+      const parts = preselected.match(/^(\d+)_/);
       if (parts) {
-        const key = parts[1] + '_' + parts[2];
+        const key = parts[1];
         groupSelect.value = key;
         populateDateSelect(key, preselected);
       }
@@ -502,22 +528,26 @@
 
     <div class="card">
       <h2>수익률 상위/하위 10</h2>
+      <p class="sub" style="margin-bottom: 4px; font-size: 12px;">
+        시작 자산 {{ "{:,.0f}".format(initial_asset) }} · 매매 안 했을 때 최종 자산 {{ "{:,.0f}".format(hold_only_asset) }}
+      </p>
       <p class="sub" style="margin-bottom: 16px; font-size: 12px;">
-        수익률이 동일한 조합은 중복 제거되어 하나만 표시됩니다.
+        수익률이 동일한 조합은 중복 제거되어 하나만 표시됩니다. "보유 대비"는 매매 안 했을 때 최종 자산과 비교한 차이(%)입니다.
       </p>
       <div class="rank-grid">
         <div class="rank-col">
           <div class="rank-title up">🔺 상위 10</div>
           <table class="rank-table">
-            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>수익률</th><th>최종자산</th></tr></thead>
+            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
             <tbody>
               {% for c in top10 %}
               <tr class="{{ 'best-row' if loop.index == 1 }}">
                 <td>{{ loop.index }}</td>
                 <td><a href="{{ c.link }}">{{ c.x }}%</a></td>
                 <td><a href="{{ c.link }}">{{ c.y }}%</a></td>
-                <td class="up"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
+                <td class="up"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
               </tr>
               {% endfor %}
             </tbody>
@@ -526,15 +556,16 @@
         <div class="rank-col">
           <div class="rank-title down">🔻 하위 10</div>
           <table class="rank-table">
-            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>수익률</th><th>최종자산</th></tr></thead>
+            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
             <tbody>
               {% for c in bottom10 %}
               <tr class="{{ 'worst-row' if loop.index == 1 }}">
                 <td>{{ loop.index }}</td>
                 <td><a href="{{ c.link }}">{{ c.x }}%</a></td>
                 <td><a href="{{ c.link }}">{{ c.y }}%</a></td>
-                <td class="down"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
+                <td class="down"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
               </tr>
               {% endfor %}
             </tbody>
@@ -584,9 +615,12 @@
     <div class="card">
       <details class="ranked-details">
         <summary>전체 수익률 보기 (max → min, {{ ranked|length }}개, 중복 수익률 제거)</summary>
+        <p class="sub" style="margin: 8px 0 0 0; font-size: 12px;">
+          시작 자산 {{ "{:,.0f}".format(initial_asset) }} · 매매 안 했을 때 최종 자산 {{ "{:,.0f}".format(hold_only_asset) }} · "보유 대비"는 그 자산과 비교한 차이(%)입니다.
+        </p>
         <div class="ranked-scroll">
           <table class="rank-table">
-            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>매수</th><th>매도</th><th>회수</th><th>수익률</th><th>최종자산</th></tr></thead>
+            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>매수</th><th>매도</th><th>회수</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
             <tbody>
               {% for c in ranked %}
               <tr class="{{ 'best-row' if loop.index == 1 }}{{ ' worst-row' if loop.index == ranked|length }}">
@@ -596,8 +630,9 @@
                 <td><a href="{{ c.link }}">{{ c['매수횟수'] }}</a></td>
                 <td><a href="{{ c.link }}">{{ c['매도횟수'] }}</a></td>
                 <td><a href="{{ c.link }}">{{ c['이익회수횟수'] }}</a></td>
-                <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
+                <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
               </tr>
               {% endfor %}
             </tbody>

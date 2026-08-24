@@ -17,6 +17,7 @@ import pandas as pd
 from flask import Flask, render_template, request, Response
 from core import (
     get_stock_data, get_stock_name, grid_trade_strategy, resolve_trade_qty,
+    daily_reversal_strategy, compute_daily_heatmap,
     compute_profit_heatmap, compute_profit_heatmap2, compute_profit_heatmap_2d,
     HEATMAP_FEATURES, SISE_DAY_URL,
 )
@@ -71,17 +72,24 @@ def _list_local_csvs():
 
 def _grouped_local_csvs(files):
     """
-    _list_local_csvs() 결과를 (종목코드+기간) 단위로 묶는다.
-    프론트에서 '종목 선택 -> 생성일자 선택' 2단계 드롭다운을 만들 때 사용.
+    _list_local_csvs() 결과를 종목코드 단위로 묶는다 (기간이 달라도 같은 종목이면 한 그룹).
+    프론트에서 '종목 선택 -> 생성일자(기간 포함) 선택' 2단계 드롭다운을 만들 때 사용.
+    각 그룹 안의 항목은 생성일자가 최신인 것이 먼저, 생성일자가 같으면 기간(일수)이 긴
+    것이 먼저 오도록 정렬한다.
     """
     groups = {}
     order = []
     for f in files:
-        key = f["group_key"]
+        key = f["code"]
         if key not in groups:
-            groups[key] = {"code": f["code"], "days": f["days"], "items": []}
+            groups[key] = {"code": f["code"], "items": []}
             order.append(key)
-        groups[key]["items"].append({"filename": f["filename"], "created_display": f["created_display"]})
+        groups[key]["items"].append({
+            "filename": f["filename"], "created": f["created"],
+            "created_display": f["created_display"], "days": f["days"],
+        })
+    for g in groups.values():
+        g["items"].sort(key=lambda item: (item["created"], int(item["days"])), reverse=True)
     return [groups[k] for k in order]
 
 
@@ -142,12 +150,34 @@ def _build_backtest_link(
     return f"/backtest?{urlencode(params)}"
 
 
+def _build_daily_link(
+    selected_file, sell_qty_pct, buy_qty_pct, init_shares,
+    allow_negative_cash, sell_above_start_asset_only,
+):
+    """히트맵4 셀·요약 클릭 시 그 조건 그대로 /daily 페이지로 이동하는 링크를 만든다."""
+    params = {
+        "file": selected_file,
+        "sell_qty_pct": sell_qty_pct,
+        "buy_qty_pct": buy_qty_pct,
+        "init_shares": init_shares,
+        # "submitted"을 명시해서, /daily의 기본값(체크박스 True) 추정 로직 대신
+        # 여기서 넘긴 sell_above_start_asset_only 값을 그대로 쓰게 한다.
+        "submitted": "1",
+    }
+    if allow_negative_cash:
+        params["allow_negative_cash"] = "on"
+    if sell_above_start_asset_only:
+        params["sell_above_start_asset_only"] = "on"
+    return f"/daily?{urlencode(params)}"
+
+
 @app.route("/", methods=["GET"])
 def index():
     code = request.args.get("code", "").strip()
     days = request.args.get("days", "30").strip()
 
     context = {
+        "active": "index",
         "code": code,
         "days": days,
         "error": None,
@@ -256,6 +286,7 @@ def backtest():
     capital = request.args.get("capital", "").strip()
 
     context = {
+        "active": "backtest",
         "files": files,
         "groups": groups,
         "selected_file": selected_file,
@@ -430,6 +461,162 @@ def backtest():
     return render_template("backtest.html", **context)
 
 
+@app.route("/daily", methods=["GET"])
+def daily():
+    """
+    "일별 방향 매매" 백테스트 페이지. gap이나 고점/저점 추적 없이, 전날 종가보다 오르면
+    매도(보유 주식수가 모자라면 건너뜀), 내리면 매수를 시도한다.
+    "현금 부족해도 매수" 체크 시 현금 잔고와 무관하게 항상 그대로 매수하고(현금 마이너스
+    허용), 체크 안 하면 쌓인 현금 범위 내에서만 매수한다.
+    "시작 자산보다 높을 때만 팔기" 체크 시 전날보다 올랐어도 그 시점 평가자산이 시작 자산을
+    회복하지 못한 상태면 매도하지 않는다.
+    """
+    files = _list_local_csvs()
+    groups = _grouped_local_csvs(files)
+    default_file = _most_recent_file(files)
+
+    selected_file = request.args.get("file", "").strip()
+    sell_qty_pct = request.args.get("sell_qty_pct", "10").strip()
+    buy_qty_pct = request.args.get("buy_qty_pct", "10").strip()
+    init_shares = request.args.get("init_shares", "100").strip()
+    allow_negative_cash = request.args.get("allow_negative_cash") == "on"
+    # 체크박스가 기본 켜짐이라, GET 파라미터가 없는 상태(폼 제출 전 최초 진입)와
+    # "사용자가 직접 체크 해제하고 제출"을 구분해야 한다. "submitted" 히든 필드로 폼 제출
+    # 여부를 판별해서, 제출 전에는 기본값(True)을, 제출 후에는 실제 체크 여부를 사용한다.
+    form_submitted = "submitted" in request.args
+    if form_submitted:
+        sell_above_start_asset_only = request.args.get("sell_above_start_asset_only") == "on"
+    else:
+        sell_above_start_asset_only = True
+
+    context = {
+        "active": "daily",
+        "files": files,
+        "groups": groups,
+        "selected_file": selected_file,
+        "default_file": default_file,
+        "sell_qty_pct": sell_qty_pct,
+        "buy_qty_pct": buy_qty_pct,
+        "init_shares": init_shares,
+        "allow_negative_cash": allow_negative_cash,
+        "sell_above_start_asset_only": sell_above_start_asset_only,
+        "error": None,
+        "summary": None,
+        "trade_log": None,
+        "sell_qty": None,
+        "buy_qty": None,
+        "initial_asset": None,
+        "hold_only_asset": None,
+        "vs_hold": None,
+        "profit": None,
+        "profit_pct": None,
+        "code": None,
+        "days": None,
+        "created_display": None,
+        "chart_labels": None,
+        "chart_prices": None,
+        "chart_sell_points": None,
+        "chart_buy_points": None,
+        "chart_total": None,
+        "chart_stock_value": None,
+        "chart_cash": None,
+        "chart_hold_only": None,
+    }
+
+    if selected_file:
+        path = os.path.join(DATA_DIR, selected_file)
+        m = _CSV_NAME_RE.match(selected_file)
+
+        if not m or not os.path.isfile(path):
+            context["error"] = "선택한 파일을 찾을 수 없습니다. 메인 페이지에서 먼저 종목을 조회해주세요."
+            return render_template("daily.html", **context)
+
+        context["code"] = m.group(1)
+        context["days"] = m.group(2)
+        created = m.group(3)
+        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
+
+        try:
+            sell_qty_pct_f = float(sell_qty_pct)
+            buy_qty_pct_f = float(buy_qty_pct)
+            init_i = int(init_shares)
+            if sell_qty_pct_f <= 0:
+                raise ValueError("매도 수량(%)은 0보다 커야 합니다.")
+            if buy_qty_pct_f <= 0:
+                raise ValueError("매수 수량(%)은 0보다 커야 합니다.")
+            if init_i < 0:
+                raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+
+            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            if df.empty:
+                raise ValueError("CSV에 데이터가 없습니다.")
+
+            sell_qty_i = resolve_trade_qty(init_i, sell_qty_pct_f)
+            buy_qty_i = resolve_trade_qty(init_i, buy_qty_pct_f)
+            context["sell_qty"] = sell_qty_i
+            context["buy_qty"] = buy_qty_i
+
+            result = daily_reversal_strategy(
+                df, sell_qty=sell_qty_i, buy_qty=buy_qty_i, initial_shares=init_i,
+                allow_negative_cash=allow_negative_cash,
+                sell_above_start_asset_only=sell_above_start_asset_only,
+            )
+
+            trade_log = result.pop("매매일지")
+            for row in trade_log:
+                row["날짜"] = pd.Timestamp(row["날짜"]).strftime("%Y-%m-%d")
+
+            asset_log = result.pop("자산추이")
+
+            sorted_df = df.sort_values("날짜")
+            chart_labels = sorted_df["날짜"].dt.strftime("%Y-%m-%d").tolist()
+            chart_prices = sorted_df["종가"].tolist()
+            chart_sell_points = [
+                {"x": row["날짜"], "y": row["가격"]} for row in trade_log if row["구분"] == "매도"
+            ]
+            chart_buy_points = [
+                {"x": row["날짜"], "y": row["가격"]} for row in trade_log if row["구분"] == "매수"
+            ]
+            chart_total = [row["total"] for row in asset_log]
+            chart_stock_value = [row["주식평가금액"] for row in asset_log]
+            chart_cash = [row["현금"] for row in asset_log]
+            # 매매 안 했을 때(시작 주식수만 계속 보유) 총자산의 날짜별 추이 — 그래프 비교용
+            chart_hold_only = [row["주가"] * init_i for row in asset_log]
+
+            first_price = float(df.sort_values("날짜")["종가"].iloc[0])
+            initial_asset = init_i * first_price
+
+            hold_only_asset = init_i * result["주가"]  # 매매 없이 그냥 들고만 있었을 때 최종 자산
+
+            profit = result["total"] - initial_asset
+            profit_pct = (profit / initial_asset * 100) if initial_asset else 0.0
+
+            vs_hold = result["total"] - hold_only_asset
+
+            context["summary"] = result
+            context["initial_asset"] = initial_asset
+            context["hold_only_asset"] = hold_only_asset
+            context["vs_hold"] = vs_hold
+            context["profit"] = profit
+            context["profit_pct"] = profit_pct
+            context["trade_log"] = trade_log
+            context["chart_labels"] = chart_labels
+            context["chart_prices"] = chart_prices
+            context["chart_sell_points"] = chart_sell_points
+            context["chart_buy_points"] = chart_buy_points
+            context["chart_total"] = chart_total
+            context["chart_stock_value"] = chart_stock_value
+            context["chart_cash"] = chart_cash
+            context["chart_hold_only"] = chart_hold_only
+
+        except ValueError as e:
+            context["error"] = f"입력 오류: {e}"
+        except Exception as e:
+            context["error"] = f"백테스트 계산 중 오류가 발생했습니다: {e}"
+
+    return render_template("daily.html", **context)
+
+
 @app.route("/heatmap", methods=["GET"])
 def heatmap():
     """
@@ -452,6 +639,7 @@ def heatmap():
     qty_pct_max = request.args.get("qty_pct_max", "50").strip()
 
     context = {
+        "active": "heatmap",
         "files": files,
         "groups": groups,
         "selected_file": selected_file,
@@ -481,6 +669,7 @@ def heatmap():
         "ranked": None,
         "ranked_raw": None,
         "initial_asset": None,
+        "hold_only_asset": None,
         "qty_stats": None,
         "recommended_qty": None,
         "recommended_qty_link": None,
@@ -555,6 +744,7 @@ def heatmap():
             context["best"] = result["best"]
             context["worst"] = result["worst"]
             context["initial_asset"] = result["initial_asset"]
+            context["hold_only_asset"] = result["hold_only_asset"]
             context["best_link"] = _build_backtest_link(
                 selected_file, result["best"]["gap"], result["best"]["qty_pct"], init_i, no_sell, no_buy, allow_negative_cash
             )
@@ -626,6 +816,7 @@ def heatmap2():
     profit_gap_max = request.args.get("profit_gap_max", "100").strip()
 
     context = {
+        "active": "heatmap2",
         "files": files,
         "groups": groups,
         "selected_file": selected_file,
@@ -658,6 +849,7 @@ def heatmap2():
         "ranked_raw": None,
         "qty": None,
         "initial_asset": None,
+        "hold_only_asset": None,
         "capital_used": None,
     }
 
@@ -742,6 +934,7 @@ def heatmap2():
             context["best"] = result["best"]
             context["worst"] = result["worst"]
             context["initial_asset"] = result["initial_asset"]
+            context["hold_only_asset"] = result["hold_only_asset"]
             context["capital_used"] = result["capital"]
             context["best_link"] = _build_backtest_link(
                 selected_file, result["best"]["gap"], qty_pct_f, init_i, no_sell, no_buy, allow_negative_cash,
@@ -808,6 +1001,7 @@ def heatmap3():
         }
 
     context = {
+        "active": "heatmap3",
         "files": files,
         "groups": groups,
         "selected_file": selected_file,
@@ -839,6 +1033,7 @@ def heatmap3():
         "ranked": None,
         "ranked_raw": None,
         "initial_asset": None,
+        "hold_only_asset": None,
     }
 
     if selected_file:
@@ -943,6 +1138,7 @@ def heatmap3():
             context["best"] = result["best"]
             context["worst"] = result["worst"]
             context["initial_asset"] = result["initial_asset"]
+            context["hold_only_asset"] = result["hold_only_asset"]
             context["best_link"] = _link_for_combo(result["best"])
             context["worst_link"] = _link_for_combo(result["worst"])
 
@@ -960,6 +1156,157 @@ def heatmap3():
             context["error"] = f"히트맵 계산 중 오류가 발생했습니다: {e}"
 
     return render_template("heatmap3.html", **context)
+
+
+@app.route("/heatmap4", methods=["GET"])
+def heatmap4():
+    """
+    daily_reversal_strategy() 전용 히트맵: 매도수량% 1~50% x 매수수량% 1~50%(둘 다 1% 단위,
+    시작 보유 주식수 대비) = 2,500가지 조합의 수익률을 계산해 히트맵으로 보여준다.
+    저장된 로컬 CSV만 사용 (네이버 재접속 없음).
+    """
+    files = _list_local_csvs()
+    groups = _grouped_local_csvs(files)
+    default_file = _most_recent_file(files)
+
+    selected_file = request.args.get("file", "").strip()
+    init_shares = request.args.get("init_shares", "100").strip()
+    allow_negative_cash = request.args.get("allow_negative_cash") == "on"
+    sell_above_start_asset_only = request.args.get("sell_above_start_asset_only") == "on"
+    sell_qty_pct_min = request.args.get("sell_qty_pct_min", "1").strip()
+    sell_qty_pct_max = request.args.get("sell_qty_pct_max", "50").strip()
+    buy_qty_pct_min = request.args.get("buy_qty_pct_min", "1").strip()
+    buy_qty_pct_max = request.args.get("buy_qty_pct_max", "50").strip()
+
+    context = {
+        "active": "heatmap4",
+        "files": files,
+        "groups": groups,
+        "selected_file": selected_file,
+        "default_file": default_file,
+        "init_shares": init_shares,
+        "allow_negative_cash": allow_negative_cash,
+        "sell_above_start_asset_only": sell_above_start_asset_only,
+        "sell_qty_pct_min": sell_qty_pct_min,
+        "sell_qty_pct_max": sell_qty_pct_max,
+        "buy_qty_pct_min": buy_qty_pct_min,
+        "buy_qty_pct_max": buy_qty_pct_max,
+        "error": None,
+        "code": None,
+        "days": None,
+        "created_display": None,
+        "sell_pcts": None,
+        "buy_pcts": None,
+        "cells": None,
+        "best": None,
+        "worst": None,
+        "best_link": None,
+        "worst_link": None,
+        "top10": None,
+        "bottom10": None,
+        "ranked": None,
+        "ranked_raw": None,
+        "initial_asset": None,
+        "hold_only_asset": None,
+    }
+
+    if selected_file:
+        path = os.path.join(DATA_DIR, selected_file)
+        m = _CSV_NAME_RE.match(selected_file)
+
+        if not m or not os.path.isfile(path):
+            context["error"] = "선택한 파일을 찾을 수 없습니다. 메인 페이지에서 먼저 종목을 조회해주세요."
+            return render_template("heatmap4.html", **context)
+
+        context["code"] = m.group(1)
+        context["days"] = m.group(2)
+        created = m.group(3)
+        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
+
+        try:
+            init_i = int(init_shares)
+            if init_i < 0:
+                raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+
+            sell_min_i = int(sell_qty_pct_min)
+            sell_max_i = int(sell_qty_pct_max)
+            buy_min_i = int(buy_qty_pct_min)
+            buy_max_i = int(buy_qty_pct_max)
+            if sell_min_i < 1 or buy_min_i < 1:
+                raise ValueError("매도/매수 수량 하한은 1 이상이어야 합니다.")
+            if sell_max_i < sell_min_i:
+                raise ValueError("매도 수량 상한은 하한보다 크거나 같아야 합니다.")
+            if buy_max_i < buy_min_i:
+                raise ValueError("매수 수량 상한은 하한보다 크거나 같아야 합니다.")
+
+            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            if df.empty:
+                raise ValueError("CSV에 데이터가 없습니다.")
+
+            sell_qty_pct_values = range(sell_min_i, sell_max_i + 1)  # 시작 보유 주식수 대비 1% 단위
+            buy_qty_pct_values = range(buy_min_i, buy_max_i + 1)
+
+            result = compute_daily_heatmap(
+                df, sell_qty_pct_values, buy_qty_pct_values, initial_shares=init_i,
+                allow_negative_cash=allow_negative_cash,
+                sell_above_start_asset_only=sell_above_start_asset_only,
+            )
+
+            vmax = max(abs(result["best"]["profit_pct"]), abs(result["worst"]["profit_pct"]), 1e-9)
+
+            cells = []
+            for si, sp in enumerate(result["sell_pcts"]):
+                for bi, bp in enumerate(result["buy_pcts"]):
+                    pct = result["grid"][si][bi]
+                    is_best = (sp == result["best"]["sell_pct"] and bp == result["best"]["buy_pct"])
+                    is_worst = (sp == result["worst"]["sell_pct"] and bp == result["worst"]["buy_pct"])
+                    cells.append({
+                        "sell_pct": sp, "buy_pct": bp, "pct": pct,
+                        "total": result["initial_asset"] * (1 + pct / 100),
+                        "color": _profit_color(pct, vmax),
+                        "link": _build_daily_link(
+                            selected_file, sp, bp, init_i, allow_negative_cash, sell_above_start_asset_only
+                        ),
+                        "is_best": is_best,
+                        "is_worst": is_worst,
+                    })
+
+            context["sell_pcts"] = result["sell_pcts"]
+            context["buy_pcts"] = result["buy_pcts"]
+            context["cells"] = cells
+            context["best"] = result["best"]
+            context["worst"] = result["worst"]
+            context["initial_asset"] = result["initial_asset"]
+            context["hold_only_asset"] = result["hold_only_asset"]
+            context["best_link"] = _build_daily_link(
+                selected_file, result["best"]["sell_pct"], result["best"]["buy_pct"],
+                init_i, allow_negative_cash, sell_above_start_asset_only,
+            )
+            context["worst_link"] = _build_daily_link(
+                selected_file, result["worst"]["sell_pct"], result["worst"]["buy_pct"],
+                init_i, allow_negative_cash, sell_above_start_asset_only,
+            )
+
+            def _with_link(combo):
+                return {
+                    **combo,
+                    "link": _build_daily_link(
+                        selected_file, combo["sell_pct"], combo["buy_pct"],
+                        init_i, allow_negative_cash, sell_above_start_asset_only,
+                    ),
+                }
+
+            context["top10"] = [_with_link(c) for c in result["top10"]]
+            context["bottom10"] = [_with_link(c) for c in result["bottom10"]]
+            context["ranked"] = [_with_link(c) for c in result["ranked"]]
+            context["ranked_raw"] = result["raw_ranked"]  # 순위별 수익률 그래프의 "중복 제거 off" 데이터 (링크 불필요)
+
+        except ValueError as e:
+            context["error"] = f"입력 오류: {e}"
+        except Exception as e:
+            context["error"] = f"히트맵 계산 중 오류가 발생했습니다: {e}"
+
+    return render_template("heatmap4.html", **context)
 
 
 if __name__ == "__main__":

@@ -2,13 +2,12 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>그리드 매매 백테스트</title>
+<title>일별 방향 매매 백테스트</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
     --up: #d24343;
     --down: #2a6fd6;
-    --recover: #b8860b;
     --bg: #f5f6f8;
     --card: #ffffff;
     --border: #e3e5e8;
@@ -87,7 +86,6 @@
   }
   form select { min-width: 180px; }
   form input[type="number"] { width: 110px; }
-  form input[name="sell_gap"], form input[name="buy_gap"] { width: 150px; }
   form button {
     padding: 10px 18px;
     border: none;
@@ -105,25 +103,6 @@
     font-size: 13px; color: var(--text); white-space: nowrap;
   }
   .checkbox-field input[type="checkbox"] { width: 16px; height: 16px; }
-  .field-group {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: flex-end;
-    padding: 10px 12px;
-    border: 1px dashed var(--border);
-    border-radius: 10px;
-  }
-  .field-group .group-label {
-    display: flex; align-items: center; gap: 6px;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--recover);
-    align-self: center;
-    margin-right: 4px;
-    white-space: nowrap;
-  }
-  .field-group .group-label input[type="checkbox"] { width: 16px; height: 16px; }
 
   .empty {
     background: var(--card);
@@ -165,8 +144,6 @@
   .stat .value { font-size: 18px; font-weight: 700; }
   .stat .value.up { color: var(--up); }
   .stat .value.down { color: var(--down); }
-  .stat.recover { background: #fdf6e3; }
-  .stat.recover .value { color: var(--recover); }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -175,7 +152,8 @@
   th { color: var(--muted); font-weight: 600; }
   td.sell { color: var(--up); font-weight: 600; }
   td.buy { color: var(--down); font-weight: 600; }
-  td.recover { color: var(--recover); font-weight: 600; }
+  td.up { color: var(--up); }
+  td.down { color: var(--down); }
 
   .table-scroll { max-height: 480px; overflow-y: auto; overflow-x: auto; }
   canvas { max-height: 360px; }
@@ -190,7 +168,6 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
   .dot.sell { background: var(--up); }
   .dot.buy { background: var(--down); }
-  .dot.recover { background: var(--recover); }
   .chart-toggle-line {
     display: flex;
     gap: 14px;
@@ -210,26 +187,25 @@
     background: var(--bg); color: var(--muted); border: 1px solid var(--border);
   }
   .option-badges .badge.warn { color: #92400e; background: #fef3c7; border-color: #fde68a; }
-  .option-badges .badge.recover { color: var(--recover); background: #fdf6e3; border-color: #f2e2b6; }
 </style>
 </head>
 <body>
 <div class="wrap">
   {% include "_nav.html" %}
-  <h1>💰 그리드 매매 백테스트</h1>
+  <h1>📅 일별 방향 매매 백테스트</h1>
   <p class="sub">
-    기본 매수/매도 규칙에 따라 그리드 매매를 백테스트합니다.
-    <b>🏦 이익 회수 사용</b>을 체크하면 추가로: 자본금(비워두면 시작 자산)을 기준으로,
-    평가금액(주식평가금액+현금)이 자본금 대비 <b>회수 gap%</b> 이상 벌었으면(매수/매도 판단보다
-    먼저 매일 체크) 그 시점 평가차익 중 <b>회수율%</b>에 해당하는 금액을 <b>현금에서 먼저
-    충당</b>하고, 모자라면 <b>주식을 추가로 매도</b>해서 마련한 뒤 별도 적립금으로 옮깁니다.
-    적립금은 이후 매매에 쓰이지 않고 최종 수익에는 그대로 합산되며, 이때 <b>시작 자산</b>도
-    이 자본금 값을 그대로 사용합니다(수익/수익률·단순보유 비교 기준). 체크하지 않으면 이익
-    회수 없이 매수/매도 규칙만으로 백테스트합니다.
+    gap이나 고점/저점 추적 없이 아주 단순한 규칙으로 매일 매매합니다:
+    <b>전날 종가보다 오르면 매도</b>, <b>내리면 매수</b>합니다 (같으면 아무 것도 안 함).
+    매도/매수 수량은 시작 보유 주식수 대비 <b>%</b>로 정합니다. 매도는 보유 주식수가
+    모자라면 건너뜁니다 (공매도 없음). <b>현금 부족해도 매수</b>를 체크하면 현금 잔고와
+    무관하게 항상 그대로 매수하고(현금이 마이너스가 될 수 있음), 체크하지 않으면 쌓인 현금
+    범위 내에서만 매수합니다. <b>시작 자산보다 높을 때만 팔기</b>를 체크하면 전날보다
+    올랐어도 그 시점 평가자산(주식평가금액+현금)이 시작 자산을 아직 회복하지 못했으면
+    매도하지 않습니다.
   </p>
 
   {% if files %}
-  <form method="get" action="/backtest" id="backtestForm">
+  <form method="get" action="/daily" id="dailyForm">
     <div class="form-row">
       <div class="field">
         <label for="group_select">종목 데이터</label>
@@ -247,18 +223,18 @@
         </select>
       </div>
       <input type="hidden" name="file" id="file" value="{{ selected_file }}">
-
-      <div class="field checkbox-field">
-        <label>
-          <input type="checkbox" name="no_sell" value="on" {% if no_sell %}checked{% endif %}>
-          매도 안 함
-        </label>
+      <input type="hidden" name="submitted" value="1">
+      <div class="field">
+        <label for="init_shares">시작 보유 주식수</label>
+        <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
       </div>
-      <div class="field checkbox-field">
-        <label>
-          <input type="checkbox" name="no_buy" value="on" {% if no_buy %}checked{% endif %}>
-          매수 안 함
-        </label>
+      <div class="field">
+        <label for="sell_qty_pct">매도 수량 (%) <span class="hint">시작 보유 주식수 대비</span></label>
+        <input type="number" name="sell_qty_pct" id="sell_qty_pct" step="0.1" min="0.1" value="{{ sell_qty_pct }}" required>
+      </div>
+      <div class="field">
+        <label for="buy_qty_pct">매수 수량 (%) <span class="hint">시작 보유 주식수 대비</span></label>
+        <input type="number" name="buy_qty_pct" id="buy_qty_pct" step="0.1" min="0.1" value="{{ buy_qty_pct }}" required>
       </div>
       <div class="field checkbox-field">
         <label>
@@ -266,46 +242,11 @@
           현금 부족해도 매수
         </label>
       </div>
-    </div>
-
-    <div class="form-row">
-      <div class="field">
-        <label for="capital">자본금 <span class="hint">비우면 시작 자산</span></label>
-        <input type="number" name="capital" id="capital" step="1" min="0" value="{{ capital }}" placeholder="시작 자산">
-      </div>
-      <div class="field">
-        <label for="init_shares">시작 보유 주식수</label>
-        <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
-      </div>
-      <div class="field">
-        <label for="sell_gap">매도 gap (%)</label>
-        <input type="number" name="sell_gap" id="sell_gap" step="0.1" min="0.1" value="{{ sell_gap }}" required>
-      </div>
-      <div class="field">
-        <label for="buy_gap">매수 gap (%) <span class="hint">비우면 매도gap과 동일</span></label>
-        <input type="number" name="buy_gap" id="buy_gap" step="0.1" min="0.1" value="{{ buy_gap }}" placeholder="매도gap과 동일">
-      </div>
-      <div class="field">
-        <label for="qty_pct">매수/매도 수량 (%) <span class="hint">시작 보유 주식수 대비</span></label>
-        <input type="number" name="qty_pct" id="qty_pct" step="0.1" min="0.1" value="{{ qty_pct }}" required>
-      </div>
-    </div>
-
-    <div class="form-row">
-      <div class="field-group">
-        <span class="group-label">
-          <input type="checkbox" name="recover_enabled" id="recover_enabled" value="on"
-                 {% if recover_enabled %}checked{% endif %} onchange="toggleRecoverFields()">
-          🏦 이익 회수 사용
-        </span>
-        <div class="field" id="profitGapField">
-          <label for="profit_gap">회수 gap (%)</label>
-          <input type="number" name="profit_gap" id="profit_gap" step="0.1" min="0.1" value="{{ profit_gap }}">
-        </div>
-        <div class="field" id="profitRecoverField">
-          <label for="profit_recover">회수율 (%)</label>
-          <input type="number" name="profit_recover" id="profit_recover" step="1" min="1" max="100" value="{{ profit_recover }}">
-        </div>
+      <div class="field checkbox-field">
+        <label>
+          <input type="checkbox" name="sell_above_start_asset_only" value="on" {% if sell_above_start_asset_only %}checked{% endif %}>
+          시작 자산보다 높을 때만 팔기
+        </label>
       </div>
       <button type="submit">계산</button>
     </div>
@@ -354,21 +295,12 @@
       }
     }
 
-    document.getElementById('backtestForm').addEventListener('submit', (e) => {
+    document.getElementById('dailyForm').addEventListener('submit', (e) => {
       if (!fileInput.value) {
         e.preventDefault();
         alert('종목과 생성일자를 모두 선택해주세요.');
       }
     });
-
-    // 이익 회수 사용 체크 여부에 따라 회수gap/회수율 필드를 보이거나 숨긴다.
-    function toggleRecoverFields() {
-      const enabled = document.getElementById('recover_enabled').checked;
-      ['profitGapField', 'profitRecoverField'].forEach(id => {
-        document.getElementById(id).style.display = enabled ? '' : 'none';
-      });
-    }
-    toggleRecoverFields();
   </script>
   {% else %}
   <div class="empty">
@@ -384,18 +316,17 @@
   {% if summary %}
     <div class="card">
       <h2>
-        {{ code }} — 매도gap {{ sell_gap }}% / 매수gap {{ "{:g}".format(effective_buy_gap) }}%
-        / 수량 {{ qty_pct }}% ({{ "{:,}".format(qty) }}주) / 시작 {{ "{:,}".format(init_shares|int) }}주
+        {{ code }} — 매도 {{ sell_qty_pct }}% ({{ "{:,}".format(sell_qty) }}주) /
+        매수 {{ buy_qty_pct }}% ({{ "{:,}".format(buy_qty) }}주) /
+        시작 {{ "{:,}".format(init_shares|int) }}주
         ({{ days }}일 데이터, {{ created_display }} 조회분)
       </h2>
+      {% if allow_negative_cash or sell_above_start_asset_only %}
       <div class="option-badges">
-        {% if no_sell %}<span class="badge">🔻 매도 안 함</span>{% endif %}
-        {% if no_buy %}<span class="badge">🔺 매수 안 함</span>{% endif %}
         {% if allow_negative_cash %}<span class="badge warn">⚠️ 현금 부족해도 매수</span>{% endif %}
-        {% if recover_enabled %}
-        <span class="badge recover">🏦 자본금 {{ "{:,.0f}".format(summary["자본금"]) }} / 회수 gap {{ profit_gap }}% / 회수율 {{ profit_recover }}%</span>
-        {% endif %}
+        {% if sell_above_start_asset_only %}<span class="badge">🔺 시작 자산보다 높을 때만 팔기</span>{% endif %}
       </div>
+      {% endif %}
       <div class="summary-grid">
         <div class="stat">
           <div class="label">시작 자산</div>
@@ -422,18 +353,12 @@
       <div class="summary-grid">
         <div class="stat">
           <div class="label">현금</div>
-          <div class="value">{{ "{:,.0f}".format(summary["현금"]) }}</div>
+          <div class="value {{ 'down' if summary['현금'] < 0 }}">{{ "{:,.0f}".format(summary["현금"]) }}</div>
         </div>
         <div class="stat">
           <div class="label">주식 평가금액</div>
           <div class="value">{{ "{:,.0f}".format(summary["주식_평가금액"]) }}</div>
         </div>
-        {% if recover_enabled %}
-        <div class="stat recover">
-          <div class="label">🏦 적립금 (손대지 않음)</div>
-          <div class="value">{{ "{:,.0f}".format(summary["적립금"]) }}</div>
-        </div>
-        {% endif %}
         <div class="stat">
           <div class="label">마지막 주가</div>
           <div class="value">{{ "{:,.0f}".format(summary["주가"]) }}</div>
@@ -443,8 +368,8 @@
           <div class="value">{{ "{:,.0f}".format(summary["보유주식수"]) }}</div>
         </div>
         <div class="stat">
-          <div class="label">매도 / 매수{% if recover_enabled %} / 회수{% endif %} 횟수</div>
-          <div class="value">{{ summary["매도횟수"] }} / {{ summary["매수횟수"] }}{% if recover_enabled %} / {{ summary["이익회수횟수"] }}{% endif %}</div>
+          <div class="label">매도 / 매수 횟수</div>
+          <div class="value">{{ summary["매도횟수"] }} / {{ summary["매수횟수"] }}</div>
         </div>
       </div>
 
@@ -463,11 +388,10 @@
     </div>
 
     <div class="card">
-      <h2>주가 추이 및 매매{% if recover_enabled %}/회수{% endif %} 시점</h2>
+      <h2>주가 추이 및 매매 시점</h2>
       <div class="legend-line">
         <span><span class="dot sell"></span> 매도</span>
         <span><span class="dot buy"></span> 매수</span>
-        {% if recover_enabled %}<span><span class="dot recover"></span> 이익회수</span>{% endif %}
       </div>
       <div class="chart-toggle-line">
         <label>
@@ -482,12 +406,10 @@
           <input type="checkbox" id="toggleCash">
           <span class="swatch" style="background: #0891b2;"></span> 현금 (y2)
         </label>
-        {% if recover_enabled %}
         <label>
-          <input type="checkbox" id="toggleReserve">
-          <span class="swatch" style="background: #b8860b;"></span> 적립금 (y2)
+          <input type="checkbox" id="toggleHoldOnly" checked>
+          <span class="swatch" style="background: #9ca3af;"></span> 매매 안 했을 때 총자산 (y2)
         </label>
-        {% endif %}
       </div>
       <canvas id="tradeChart"></canvas>
     </div>
@@ -501,14 +423,13 @@
             <tr>
               <th>날짜</th>
               <th>구분</th>
-              <th>max</th>
-              <th>min</th>
-              <th>등락률</th>
               <th>가격</th>
               <th>수량</th>
               <th>현금잔고</th>
               <th>보유주식수</th>
               <th>주식평가금액</th>
+              <th>매매 안 했을 때 자산</th>
+              <th>차이</th>
             </tr>
           </thead>
           <tbody>
@@ -516,14 +437,13 @@
             <tr>
               <td>{{ row["날짜"] }}</td>
               <td class="{{ 'sell' if row['구분'] == '매도' else 'buy' }}">{{ row["구분"] }}</td>
-              <td>{{ "{:,.0f}".format(row["max"]) }}</td>
-              <td>{{ "{:,.0f}".format(row["min"]) }}</td>
-              <td class="{{ 'sell' if row['구분'] == '매도' else 'buy' }}">{{ "{:+.2f}".format(row["등락률"]) }}%</td>
               <td>{{ "{:,.0f}".format(row["가격"]) }}</td>
               <td>{{ row["수량"] }}</td>
               <td>{{ "{:,.0f}".format(row["현금잔고"]) }}</td>
               <td>{{ row["보유주식수"] }}</td>
               <td>{{ "{:,.0f}".format(row["주식평가금액"]) }}</td>
+              <td>{{ "{:,.0f}".format(row["매매안했을때자산"]) }}</td>
+              <td class="{{ 'up' if row['차이'] >= 0 else 'down' }}">{{ "{:+,.0f}".format(row["차이"]) }}</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -534,56 +454,9 @@
       {% endif %}
     </div>
 
-    {% if recover_enabled %}
-    <div class="card">
-      <h2>이익회수일지 ({{ recover_log|length }}건)</h2>
-      {% if recover_log %}
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>날짜</th>
-              <th>자본금</th>
-              <th>가격</th>
-              <th>평가금액</th>
-              <th>평가차익</th>
-              <th>현금사용액</th>
-              <th>매도주식수</th>
-              <th>회수액</th>
-              <th>적립금잔고</th>
-              <th>현금잔고</th>
-              <th>보유주식수</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in recover_log %}
-            <tr>
-              <td>{{ row["날짜"] }}</td>
-              <td>{{ "{:,.0f}".format(row["자본금"]) }}</td>
-              <td class="recover">{{ "{:,.0f}".format(row["가격"]) }}</td>
-              <td>{{ "{:,.0f}".format(row["평가금액"]) }}</td>
-              <td>{{ "{:,.0f}".format(row["평가차익"]) }}</td>
-              <td>{{ "{:,.0f}".format(row["현금사용액"]) }}</td>
-              <td class="recover">{{ row["매도주식수"] }}</td>
-              <td class="recover">{{ "{:,.0f}".format(row["회수액"]) }}</td>
-              <td>{{ "{:,.0f}".format(row["적립금잔고"]) }}</td>
-              <td>{{ "{:,.0f}".format(row["현금잔고"]) }}</td>
-              <td>{{ row["보유주식수"] }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}
-      <p style="color: var(--muted); font-size: 14px;">이 조건에서는 이익 회수가 발생하지 않았습니다.</p>
-      {% endif %}
-    </div>
-    {% endif %}
-
     <script>
       const ctx = document.getElementById('tradeChart');
-      // y2(오른쪽) 축에 그리는 자산 시리즈들의 datasets 배열 인덱스. 토글 체크박스에서 사용.
-      const ASSET_DATASET_INDEX = { total: 4, stockValue: 5, cash: 6, reserve: 7 };
+      const ASSET_DATASET_INDEX = { total: 3, stockValue: 4, cash: 5, holdOnly: 6 };
 
       const tradeChart = new Chart(ctx, {
         type: 'line',
@@ -601,7 +474,7 @@
               fill: true,
               pointRadius: 0,
               yAxisID: 'y',
-              order: 4,
+              order: 3,
             },
             {
               type: 'scatter',
@@ -611,8 +484,8 @@
               borderColor: '#d24343',
               pointStyle: 'triangle',
               pointRotation: 180,
-              pointRadius: 7,
-              pointHoverRadius: 9,
+              pointRadius: 6,
+              pointHoverRadius: 8,
               showLine: false,
               yAxisID: 'y',
               order: 1,
@@ -625,24 +498,11 @@
               borderColor: '#2a6fd6',
               pointStyle: 'triangle',
               pointRotation: 0,
-              pointRadius: 7,
-              pointHoverRadius: 9,
+              pointRadius: 6,
+              pointHoverRadius: 8,
               showLine: false,
               yAxisID: 'y',
               order: 2,
-            },
-            {
-              type: 'scatter',
-              label: '이익회수',
-              data: {{ chart_recover_points | tojson }},
-              backgroundColor: '#b8860b',
-              borderColor: '#b8860b',
-              pointStyle: 'star',
-              pointRadius: 8,
-              pointHoverRadius: 10,
-              showLine: false,
-              yAxisID: 'y',
-              order: 0,
             },
             {
               type: 'line',
@@ -655,7 +515,7 @@
               pointRadius: 0,
               yAxisID: 'y2',
               hidden: false,
-              order: 5,
+              order: 4,
             },
             {
               type: 'line',
@@ -668,7 +528,7 @@
               pointRadius: 0,
               yAxisID: 'y2',
               hidden: true,
-              order: 6,
+              order: 5,
             },
             {
               type: 'line',
@@ -681,20 +541,21 @@
               pointRadius: 0,
               yAxisID: 'y2',
               hidden: true,
-              order: 7,
+              order: 6,
             },
             {
               type: 'line',
-              label: '적립금',
-              data: {{ chart_reserve | tojson }},
-              borderColor: '#b8860b',
+              label: '매매 안 했을 때 총자산',
+              data: {{ chart_hold_only | tojson }},
+              borderColor: '#9ca3af',
               borderWidth: 1.5,
+              borderDash: [4, 3],
               tension: 0.1,
               fill: false,
               pointRadius: 0,
               yAxisID: 'y2',
-              hidden: true,
-              order: 8,
+              hidden: false,
+              order: 7,
             },
           ]
         },
@@ -708,8 +569,6 @@
                 title: (items) => {
                   if (!items.length) return '';
                   const item = items[0];
-                  // scatter(매도/매수/이익회수) 포인트는 raw가 {x, y} 객체라 실제 날짜(x)를 그대로 쓴다.
-                  // line(종가) 포인트는 raw가 숫자라, 기존처럼 labels[index]를 사용한다.
                   if (item.raw && typeof item.raw === 'object' && 'x' in item.raw) {
                     return item.raw.x;
                   }
@@ -746,7 +605,7 @@
       bindAssetToggle('toggleTotal', ASSET_DATASET_INDEX.total);
       bindAssetToggle('toggleStockValue', ASSET_DATASET_INDEX.stockValue);
       bindAssetToggle('toggleCash', ASSET_DATASET_INDEX.cash);
-      bindAssetToggle('toggleReserve', ASSET_DATASET_INDEX.reserve);
+      bindAssetToggle('toggleHoldOnly', ASSET_DATASET_INDEX.holdOnly);
     </script>
   {% endif %}
 </div>

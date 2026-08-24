@@ -1,0 +1,15 @@
+<div class="nav">
+  <a href="/" class="nav-home {{ 'active' if active == 'index' }}">🏠 메인 조회</a>
+  <span class="nav-group">
+    <span class="nav-group-label">그리드 매매</span>
+    <a href="/backtest" class="{{ 'active' if active == 'backtest' }}">백테스트</a>
+    <a href="/heatmap" class="{{ 'active' if active == 'heatmap' }}">gap 히트맵</a>
+    <a href="/heatmap2" class="{{ 'active' if active == 'heatmap2' }}">이익회수 히트맵</a>
+    <a href="/heatmap3" class="{{ 'active' if active == 'heatmap3' }}">통합 히트맵</a>
+  </span>
+  <span class="nav-group">
+    <span class="nav-group-label">일별 방향</span>
+    <a href="/daily" class="{{ 'active' if active == 'daily' }}">일별 매매</a>
+    <a href="/heatmap4" class="{{ 'active' if active == 'heatmap4' }}">매도×매수 히트맵</a>
+  </span>
+</div>

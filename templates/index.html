@@ -23,9 +23,39 @@
     padding: 32px 16px;
   }
   .wrap { max-width: 1100px; margin: 0 auto; }
-  .nav { margin-bottom: 12px; }
-  .nav a { color: #2a6fd6; text-decoration: none; font-size: 13px; font-weight: 600; }
-  .nav a:hover { text-decoration: underline; }
+  .nav {
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .nav .nav-home { color: #2a6fd6; text-decoration: none; font-weight: 600; }
+  .nav .nav-home:hover { text-decoration: underline; }
+  .nav .nav-home.active { color: var(--text); text-decoration: underline; }
+  .nav .nav-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 14px 5px 12px;
+  }
+  .nav .nav-group-label {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding-right: 8px;
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .nav .nav-group a { color: #2a6fd6; text-decoration: none; white-space: nowrap; }
+  .nav .nav-group a:hover { text-decoration: underline; }
+  .nav .nav-group a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
   h1 { font-size: 22px; margin-bottom: 4px; }
   p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; }
 
@@ -134,12 +164,7 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="nav">
-    <a href="/backtest">💰 그리드 매매 백테스트(수익 확인·이익 회수) →</a>
-    <a href="/heatmap" style="margin-left: 16px;">🔥 gap × 수량 히트맵 →</a>
-    <a href="/heatmap2" style="margin-left: 16px;">🔥🏦 이익회수 히트맵 →</a>
-    <a href="/heatmap3" style="margin-left: 16px;">🧭 통합 히트맵(축 선택) →</a>
-  </div>
+  {% include "_nav.html" %}
   <h1>📈 네이버 주식 시세 조회</h1>
   <p class="sub">종목 코드와 기간(오늘부터 며칠 전까지)을 입력하세요. 예: 삼성전자 005930, 카카오 035720</p>
 
