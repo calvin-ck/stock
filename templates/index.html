@@ -186,7 +186,10 @@
 
   {% if table %}
     <div class="card">
-      <h2>{{ name or code }}{% if name %} ({{ code }}){% endif %} — 최근 {{ days }}일 종가 추이</h2>
+      <h2>
+        {{ name or code }}{% if name %} ({{ code }}){% endif %} — 최근 {{ days }}일 종가 추이
+        {% if from_cache %}<span style="font-weight:400;font-size:13px;color:var(--muted);">(로컬 캐시 재사용, 네이버 재조회 안 함)</span>{% endif %}
+      </h2>
       <canvas id="priceChart"></canvas>
     </div>
 

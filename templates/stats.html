@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>가격 통계</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --up: #d24343;
+    --down: #2a6fd6;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --border: #e3e5e8;
+    --text: #1f2328;
+    --muted: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 32px 16px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  .nav {
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .nav .nav-home { color: #2a6fd6; text-decoration: none; font-weight: 600; }
+  .nav .nav-home:hover { text-decoration: underline; }
+  .nav .nav-home.active { color: var(--text); text-decoration: underline; }
+  .nav a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
+  .nav .nav-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 14px 5px 12px;
+  }
+  .nav .nav-group-label {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding-right: 8px;
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .nav .nav-group a { color: #2a6fd6; text-decoration: none; white-space: nowrap; }
+  .nav .nav-group a:hover { text-decoration: underline; }
+  .nav .nav-group a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--card);
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field .hint { font-weight: 400; color: var(--muted); }
+  form select, form input {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  form select { min-width: 180px; }
+  form input[type="number"] { width: 110px; }
+  form button {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #1f2328;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    height: 41px;
+  }
+  form button:hover { background: #3b3f45; }
+
+  .empty {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .empty a { color: #2a6fd6; }
+
+  .error {
+    background: #fdecec;
+    color: var(--up);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 14px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 12px 0; }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .summary-grid + .summary-grid { margin-top: 10px; }
+  .stat { background: var(--bg); border-radius: 10px; padding: 12px 14px; }
+  .stat .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .stat .value { font-size: 18px; font-weight: 700; }
+  .stat .value.up { color: var(--up); }
+  .stat .value.down { color: var(--down); }
+
+  .hist-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 20px;
+  }
+  .hist-grid .card { margin-bottom: 0; }
+  canvas { max-height: 280px; }
+
+  .chart-toggle-line {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text);
+    margin-bottom: 12px;
+  }
+  .chart-toggle-line label, .chart-toggle-line .swatch-label {
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .chart-toggle-line label { cursor: pointer; }
+  .chart-toggle-line .swatch-label { color: var(--muted); }
+  .chart-toggle-line input[type="checkbox"] { width: 14px; height: 14px; }
+  .chart-toggle-line .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  {% include "_nav.html" %}
+  <h1>📊 가격 통계</h1>
+  <p class="sub">
+    전날 종가 대비 <b>상승/하락/보합</b> 일수와 <b>연속 상승·하락(streak) 일수 분포</b>,
+    상승일·하락일 각각의 <b>등락률(%) 분포</b>를 보여줍니다. 등락률 히스토그램은 값을
+    <b>정수(1%p)</b> 단위로 반올림해 집계합니다.
+  </p>
+
+  {% if files %}
+  <form method="get" action="/stats" id="statsForm">
+    <div class="form-row">
+      {% include "_csv_file_selector.html" %}
+      <button type="submit">통계 계산</button>
+    </div>
+  </form>
+  {% else %}
+  <div class="empty">
+    저장된 데이터가 없습니다. <a href="/">메인 페이지</a>에서 종목을 먼저 조회해주세요.<br>
+    (조회한 데이터는 자동으로 로컬 CSV에 저장되어 여기서 재사용됩니다.)
+  </div>
+  {% endif %}
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {% include "_fetch_note.html" %}
+
+  {% if result %}
+    <div class="card">
+      <h2>{{ code }} — 종가 추이 ({{ applied_period }}일)</h2>
+      <canvas id="priceChart"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>
+        {{ code }} — {{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분
+        ({{ result.총일수 }}거래일 기준)
+      </h2>
+      <div class="summary-grid">
+        <div class="stat">
+          <div class="label">상승 일수</div>
+          <div class="value up">{{ result.상승일수 }}일 ({{ "%.1f"|format(result.상승비율) }}%)</div>
+        </div>
+        <div class="stat">
+          <div class="label">하락 일수</div>
+          <div class="value down">{{ result.하락일수 }}일 ({{ "%.1f"|format(result.하락비율) }}%)</div>
+        </div>
+        <div class="stat">
+          <div class="label">보합 일수</div>
+          <div class="value">{{ result.보합일수 }}일</div>
+        </div>
+        <div class="stat">
+          <div class="label">상승일 평균 등락률</div>
+          <div class="value up">+{{ "%.2f"|format(result.상승평균등락률) }}%</div>
+        </div>
+        <div class="stat">
+          <div class="label">하락일 평균 등락률</div>
+          <div class="value down">{{ "%.2f"|format(result.하락평균등락률) }}%</div>
+        </div>
+      </div>
+      <div class="summary-grid">
+        <div class="stat">
+          <div class="label">상승일 최대 등락률</div>
+          <div class="value up">+{{ "%.2f"|format(result.상승최대등락률) }}%</div>
+        </div>
+        <div class="stat">
+          <div class="label">하락일 최대 등락률</div>
+          <div class="value down">{{ "%.2f"|format(result.하락최대등락률) }}%</div>
+        </div>
+        <div class="stat">
+          <div class="label">최대 연속 상승</div>
+          <div class="value up">{{ result.상승연속최대 }}일</div>
+        </div>
+        <div class="stat">
+          <div class="label">최대 연속 하락</div>
+          <div class="value down">{{ result.하락연속최대 }}일</div>
+        </div>
+        <div class="stat">
+          <div class="label">평균 연속 상승/하락</div>
+          <div class="value">{{ "%.1f"|format(result.상승연속평균) }}일 / {{ "%.1f"|format(result.하락연속평균) }}일</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hist-grid">
+      <div class="card">
+        <h2>연속 상승 일수 분포</h2>
+        <canvas id="upStreakChart"></canvas>
+      </div>
+      <div class="card">
+        <h2>연속 하락 일수 분포</h2>
+        <canvas id="downStreakChart"></canvas>
+      </div>
+      <div class="card">
+        <h2>상승일 등락률(%) 분포</h2>
+        <canvas id="upPctChart"></canvas>
+      </div>
+      <div class="card">
+        <h2>하락일 등락률(%) 분포</h2>
+        <canvas id="downPctChart"></canvas>
+      </div>
+    </div>
+
+    <div class="hist-grid">
+      <div class="card">
+        <h2>연속 상승 일수별 1일 평균/합계 등락률(%)</h2>
+        <p class="sub" style="margin-bottom: 12px; font-size: 12px;">
+          x축 = 연속 상승 일수. "합계"는 구간들끼리 더한 값이 아니라, <b>구간 하나 안에서</b>
+          그 며칠간의 등락률을 합친 값이다(예: 2일 연속 상승이면 그 2일의 등락률 합, 구간
+          시작 전날 종가 대비 마지막 날 종가로 계산). 왼쪽(1일 평균, 항상 표시) = 그 길이
+          구간 하나의 "하루 평균 기세", 같은 길이가 여러 개면 그 값들끼리 평균. 오른쪽(y2)의
+          <b>합계평균</b>은 같은 길이 구간들의 "구간 내 등락률 합"을 평균 낸 것, <b>합계최대</b>
+          는 그중 절댓값이 가장 큰 것(가장 크게 오른 경우) — 아래에서 켜고 끌 수 있습니다.
+        </p>
+        <div class="chart-toggle-line">
+          <span class="swatch-label"><span class="swatch" style="background: #d24343;"></span> 1일 평균 (y)</span>
+          <label>
+            <input type="checkbox" id="upToggleSumAvg" checked>
+            <span class="swatch" style="background: #f59e0b;"></span> 합계평균 (y2)
+          </label>
+          <label>
+            <input type="checkbox" id="upToggleSumMax">
+            <span class="swatch" style="background: #f59e0b99;"></span> 합계최대 (y2)
+          </label>
+        </div>
+        <canvas id="upStreakLineChart"></canvas>
+      </div>
+      <div class="card">
+        <h2>연속 하락 일수별 1일 평균/합계 등락률(%)</h2>
+        <p class="sub" style="margin-bottom: 12px; font-size: 12px;">
+          위와 동일한 방식이며 연속 하락 구간 기준입니다(하락이라 값이 음수 — "합계최대"는
+          절댓값이 가장 큰, 즉 가장 크게 내린 구간).
+        </p>
+        <div class="chart-toggle-line">
+          <span class="swatch-label"><span class="swatch" style="background: #2a6fd6;"></span> 1일 평균 (y)</span>
+          <label>
+            <input type="checkbox" id="downToggleSumAvg" checked>
+            <span class="swatch" style="background: #0891b2;"></span> 합계평균 (y2)
+          </label>
+          <label>
+            <input type="checkbox" id="downToggleSumMax">
+            <span class="swatch" style="background: #0891b299;"></span> 합계최대 (y2)
+          </label>
+        </div>
+        <canvas id="downStreakLineChart"></canvas>
+      </div>
+    </div>
+
+    <script>
+      const RESULT = {{ result | tojson }};
+
+      new Chart(document.getElementById('priceChart'), {
+        type: 'line',
+        data: {
+          labels: {{ chart_labels | tojson }},
+          datasets: [{
+            label: '종가',
+            data: {{ chart_prices | tojson }},
+            borderColor: '#d24343',
+            backgroundColor: 'rgba(210,67,67,0.08)',
+            tension: 0.25,
+            fill: true,
+            pointRadius: 2,
+          }],
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { ticks: { callback: (v) => v.toLocaleString() } },
+          },
+        },
+      });
+
+      function drawStreakLine(canvasId, agg, avgColor, sumColor) {
+        const chart = new Chart(document.getElementById(canvasId), {
+          type: 'bar',
+          data: {
+            labels: agg.lengths,
+            datasets: [
+              {
+                type: 'line', label: '1일 평균', data: agg['1일평균'], yAxisID: 'y',
+                borderColor: avgColor, backgroundColor: avgColor, tension: 0.2,
+              },
+              {
+                type: 'line', label: '합계평균', data: agg.합계평균, yAxisID: 'y2',
+                borderColor: sumColor, backgroundColor: sumColor, tension: 0.2,
+              },
+              {
+                type: 'line', label: '합계최대', data: agg.합계최대, yAxisID: 'y2',
+                borderColor: sumColor, backgroundColor: sumColor, borderDash: [4, 3], tension: 0.2,
+                hidden: true,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              // 범례를 끄는 이유: 범례 클릭으로도 계열을 껐다 켤 수 있어서, 아래 체크박스와
+              // 두 개의 컨트롤이 서로 상태가 어긋나는 문제가 있었다 — 체크박스 하나만 남긴다.
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  afterLabel: (item) => item.datasetIndex === 0 ? `건수: ${agg.건수[item.dataIndex]}` : '',
+                },
+              },
+            },
+            scales: {
+              x: { title: { display: true, text: '연속 일수' } },
+              y: { position: 'left', title: { display: true, text: '1일 평균 등락률 (%)' } },
+              y2: {
+                position: 'right',
+                title: { display: true, text: '합계 등락률 (%)' },
+                grid: { drawOnChartArea: false },
+              },
+            },
+          },
+        });
+        return chart;
+      }
+
+      function bindStreakToggle(checkboxId, chart, datasetIndex) {
+        const el = document.getElementById(checkboxId);
+        if (!el) return;
+        chart.setDatasetVisibility(datasetIndex, el.checked);
+        chart.update();
+        el.addEventListener('change', () => {
+          chart.setDatasetVisibility(datasetIndex, el.checked);
+          chart.update();
+        });
+      }
+
+      const upStreakChartInstance = drawStreakLine('upStreakLineChart', RESULT.상승연속_길이별, '#d24343', '#f59e0b');
+      bindStreakToggle('upToggleSumAvg', upStreakChartInstance, 1);
+      bindStreakToggle('upToggleSumMax', upStreakChartInstance, 2);
+
+      const downStreakChartInstance = drawStreakLine('downStreakLineChart', RESULT.하락연속_길이별, '#2a6fd6', '#0891b2');
+      bindStreakToggle('downToggleSumAvg', downStreakChartInstance, 1);
+      bindStreakToggle('downToggleSumMax', downStreakChartInstance, 2);
+
+      function drawBar(canvasId, dataPairs, color, xTitle, yTitle) {
+        new Chart(document.getElementById(canvasId), {
+          type: 'bar',
+          data: {
+            labels: dataPairs.map(p => p[0]),
+            datasets: [{ data: dataPairs.map(p => p[1]), backgroundColor: color, barPercentage: 1.0, categoryPercentage: 0.9 }],
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { title: { display: true, text: xTitle }, ticks: { autoSkip: true, maxTicksLimit: 20 } },
+              y: { title: { display: true, text: yTitle }, beginAtZero: true, ticks: { precision: 0 } },
+            },
+          },
+        });
+      }
+
+      // 연속 상승/하락: x축의 각 길이(N일)가 몇 번(건) 나타났는지 - 건수이지 총 일수가 아니다.
+      // 예: x=2, y=10 -> "2일짜리 연속 상승 구간이 10번" (총 20일이 아니라 10건).
+      drawBar('upStreakChart', RESULT.상승연속분포, '#d2434399', '연속 상승 일수', '건수');
+      drawBar('downStreakChart', RESULT.하락연속분포, '#2a6fd699', '연속 하락 일수', '건수');
+      // 등락률 분포는 각 x값(반올림된 등락률)마다 정확히 하루씩 대응되므로 y축이 곧 일수다.
+      drawBar('upPctChart', RESULT.상승등락률분포, '#d2434399', '등락률 (%)', '일수');
+      drawBar('downPctChart', RESULT.하락등락률분포, '#2a6fd699', '등락률 (%)', '일수');
+    </script>
+  {% endif %}
+</div>
+</body>
+</html>

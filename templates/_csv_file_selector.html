@@ -1,0 +1,32 @@
+{# 종목(group_select) -> 생성일자(date_select) -> 기간(period) -> 숨은 file input.
+   groups/selected_file/default_file/period/max_days는 각 라우트의 context에서 온다. #}
+<div class="field">
+  <label for="group_select">종목 데이터</label>
+  <select id="group_select" required>
+    <option value="">선택하세요</option>
+    {% for g in groups %}
+    <option value="{{ g.code }}">{{ g.code }}</option>
+    {% endfor %}
+  </select>
+</div>
+<div class="field">
+  <label for="date_select">생성일자</label>
+  <select id="date_select" required disabled>
+    <option value="">종목을 먼저 선택하세요</option>
+  </select>
+</div>
+<div class="field">
+  <label for="period">기간(일) <span class="hint">비우면 최대 범위</span></label>
+  <input type="number" name="period" id="period" min="1" value="{{ period }}"
+         placeholder="{% if max_days %}최대 {{ max_days }}일{% else %}자동{% endif %}">
+</div>
+<input type="hidden" name="file" id="file" value="{{ selected_file }}">
+<script>
+  window.CSV_SELECTOR_DATA = {
+    groups: {{ groups | tojson }},
+    selectedFile: "{{ selected_file }}",
+    defaultFile: "{{ default_file }}",
+    hasExplicitPeriod: {{ 'true' if period else 'false' }},
+  };
+</script>
+<script src="{{ url_for('static', filename='js/csv_selector.js') }}"></script>

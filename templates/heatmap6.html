@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>일별 매매 히트맵 — 매도수량 × 매수수량</title>
+<title>일별 방향3 통합 히트맵 — 축 선택형</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
@@ -22,7 +22,7 @@
     margin: 0;
     padding: 32px 16px;
   }
-  .wrap { max-width: 1100px; margin: 0 auto; }
+  .wrap { max-width: 1150px; margin: 0 auto; }
   .nav {
     margin-bottom: 16px;
     display: flex;
@@ -73,6 +73,7 @@
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-size: 12px; color: var(--muted); }
   .field .hint { font-weight: 400; color: var(--muted); }
+  .hint { font-weight: 400; color: var(--muted); font-size: 11px; }
   form select, form input {
     padding: 10px 12px;
     border: 1px solid var(--border);
@@ -80,7 +81,7 @@
     font-size: 14px;
   }
   form select { min-width: 180px; }
-  form input[type="number"] { width: 110px; }
+  form input[type="number"] { width: 100px; }
   form button {
     padding: 10px 18px;
     border: none;
@@ -96,6 +97,24 @@
   .checkbox-field label {
     display: flex; align-items: center; gap: 6px;
     font-size: 13px; color: var(--text); white-space: nowrap;
+  }
+
+  .axis-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    padding: 10px 12px;
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+  }
+  .axis-row .group-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+    align-self: center;
+    margin-right: 4px;
+    white-space: nowrap;
   }
 
   .empty {
@@ -129,7 +148,7 @@
 
   .callout-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 12px;
   }
   .callout {
@@ -166,7 +185,6 @@
   .heatmap-col { display: flex; flex-direction: column; gap: 6px; }
   .heatmap-grid {
     display: grid;
-    grid-template-columns: repeat(50, 12px);
     grid-auto-rows: 12px;
     gap: 1px;
   }
@@ -250,16 +268,21 @@
 <body>
 <div class="wrap">
   {% include "_nav.html" %}
-  <h1>📅🔥 일별 매매 히트맵 — 매도수량 × 매수수량</h1>
+  <h1>📅3️⃣🧭 일별 방향3 통합 히트맵 — 축 선택형</h1>
   <p class="sub">
-    "일별 방향 매매"(전날보다 오르면 매도, 내리면 매수) 전략에서 <b>매도수량%</b>와
-    <b>매수수량%</b>(둘 다 시작 보유 주식수 대비)의 범위를 지정하면 그 조합별(1% 단위)
-    수익률을 한번에 계산합니다. 저장된 로컬 CSV만 사용하므로 네이버에 다시 접속하지 않습니다.
-    각 칸을 클릭하면 그 조건 그대로 일별 매매 페이지로 이동해 매매일지를 볼 수 있습니다.
+    "일별 방향3"(정적 기준가 — 상승gap% 오르면 매도, 하락gap% 내리면 매수) 전략의
+    <b>상승gap</b> · <b>하락gap</b> · <b>매도/매수 수량</b> 3개 중 2개를 골라 X축/Y축으로
+    스윕합니다. 축으로 고르지 않은 나머지 하나는 아래에서 <b>고정값</b>으로 입력합니다.
+    <b>하락gap</b>을 고정값으로 남기고 비워두면, daily_reference_strategy()의 기본 동작과
+    동일하게 그때그때의 상승gap 값을 그대로 하락gap으로 씁니다("하락gap = 상승gap"). 기본
+    설정은 X축=상승gap, Y축=매도/매수 수량이며, 이 경우 고정값은 하락gap이라 자동으로
+    상승gap과 동일하게 스윕됩니다. 저장된 로컬 CSV를 사용하며, 없거나 부족하면 다른
+    페이지들과 동일하게 네이버에서 자동으로 채웁니다. 각 칸/카드를 클릭하면 그 조건 그대로
+    일별 방향3 페이지로 이동합니다.
   </p>
 
   {% if files %}
-  <form method="get" action="/heatmap4" id="heatmapForm">
+  <form method="get" action="/heatmap6" id="heatmapForm">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
 
@@ -271,28 +294,15 @@
       </div>
       <div class="field checkbox-field">
         <label>
-          <input type="checkbox" name="sell_above_start_asset_only" value="on" {% if sell_above_start_asset_only %}checked{% endif %}>
-          시작 자산보다 높을 때만 팔기
+          <input type="checkbox" name="no_sell" value="on" {% if no_sell %}checked{% endif %}>
+          매도 안 함
         </label>
       </div>
-    </div>
-
-    <div class="form-row">
-      <div class="field">
-        <label for="sell_qty_pct_min">매도수량 하한(%)</label>
-        <input type="number" name="sell_qty_pct_min" id="sell_qty_pct_min" min="1" value="{{ sell_qty_pct_min }}" required>
-      </div>
-      <div class="field">
-        <label for="sell_qty_pct_max">매도수량 상한(%)</label>
-        <input type="number" name="sell_qty_pct_max" id="sell_qty_pct_max" min="1" value="{{ sell_qty_pct_max }}" required>
-      </div>
-      <div class="field">
-        <label for="buy_qty_pct_min">매수수량 하한(%)</label>
-        <input type="number" name="buy_qty_pct_min" id="buy_qty_pct_min" min="1" value="{{ buy_qty_pct_min }}" required>
-      </div>
-      <div class="field">
-        <label for="buy_qty_pct_max">매수수량 상한(%)</label>
-        <input type="number" name="buy_qty_pct_max" id="buy_qty_pct_max" min="1" value="{{ buy_qty_pct_max }}" required>
+      <div class="field checkbox-field">
+        <label>
+          <input type="checkbox" name="no_buy" value="on" {% if no_buy %}checked{% endif %}>
+          매수 안 함
+        </label>
       </div>
     </div>
 
@@ -301,10 +311,92 @@
         <label for="init_shares">시작 보유 주식수</label>
         <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
       </div>
+    </div>
+
+    <div class="form-row">
+      <div class="field">
+        <label for="x_feature">X축 (세로)</label>
+        <select name="x_feature" id="x_feature">
+          {% for feat, meta in features.items() %}
+          <option value="{{ feat }}" {% if feat == x_feature %}selected{% endif %}>{{ meta.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="y_feature">Y축 (가로)</label>
+        <select name="y_feature" id="y_feature">
+          {% for feat, meta in features.items() %}
+          <option value="{{ feat }}" {% if feat == y_feature %}selected{% endif %}>{{ meta.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      {% for feat in ['up_gap', 'down_gap', 'qty_pct'] %}
+      {% set meta = features[feat] %}
+      {% set is_axis = (feat == x_feature or feat == y_feature) %}
+      <div class="axis-row feature-sweep" id="sweep-{{ feat }}" style="display: {{ '' if is_axis else 'none' }};">
+        <span class="group-label">{{ meta.label }} 스윕</span>
+        <div class="field">
+          <label for="{{ feat }}_min">하한</label>
+          <input type="number" name="{{ feat }}_min" id="{{ feat }}_min" min="1" value="{{ feature_inputs[feat].min }}">
+        </div>
+        <div class="field">
+          <label for="{{ feat }}_max">상한</label>
+          <input type="number" name="{{ feat }}_max" id="{{ feat }}_max" min="1" value="{{ feature_inputs[feat].max }}">
+        </div>
+      </div>
+      <div class="axis-row feature-fixed" id="fixed-{{ feat }}" style="display: {{ 'none' if is_axis else '' }};">
+        <span class="group-label">{{ meta.label }} 고정값</span>
+        <div class="field">
+          <label for="{{ feat }}_fixed">
+            값
+            {% if feat == 'down_gap' %}<span class="hint">비우면 상승gap과 동일</span>{% endif %}
+          </label>
+          <input type="number" name="{{ feat }}_fixed" id="{{ feat }}_fixed" step="0.1" min="0.1"
+                 value="{{ feature_inputs[feat].fixed }}"
+                 placeholder="{% if feat == 'down_gap' %}상승gap과 동일{% endif %}">
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="form-row">
       <button type="submit">히트맵 계산</button>
     </div>
   </form>
 
+  <script>
+    // X축/Y축 선택에 따라 각 피쳐의 스윕(min/max) 입력과 고정값 입력을 보이거나 숨긴다.
+    // 같은 피쳐를 X/Y 양쪽에 고르면 자동으로 서로 바꿔치기해서 항상 서로 달라지게 한다.
+    const FEATURES = {{ features.keys() | list | tojson }};
+    const xSelect = document.getElementById('x_feature');
+    const ySelect = document.getElementById('y_feature');
+
+    function updateFeatureVisibility() {
+      const x = xSelect.value;
+      const y = ySelect.value;
+      FEATURES.forEach(f => {
+        const isAxis = (f === x || f === y);
+        document.getElementById('sweep-' + f).style.display = isAxis ? '' : 'none';
+        document.getElementById('fixed-' + f).style.display = isAxis ? 'none' : '';
+      });
+    }
+
+    xSelect.addEventListener('change', () => {
+      if (xSelect.value === ySelect.value) {
+        ySelect.value = FEATURES.find(f => f !== xSelect.value);
+      }
+      updateFeatureVisibility();
+    });
+    ySelect.addEventListener('change', () => {
+      if (ySelect.value === xSelect.value) {
+        xSelect.value = FEATURES.find(f => f !== ySelect.value);
+      }
+      updateFeatureVisibility();
+    });
+  </script>
   {% else %}
   <div class="empty">
     저장된 데이터가 없습니다. <a href="/">메인 페이지</a>에서 종목을 먼저 조회해주세요.<br>
@@ -322,20 +414,26 @@
     <div class="card">
       <h2>
         {{ code }} — 시작 {{ "{:,}".format(init_shares|int) }}주 / 시작 자산 {{ "{:,.0f}".format(initial_asset) }}
-        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분)
+        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분) — X축: {{ x_label }} / Y축: {{ y_label }}
       </h2>
       <div class="callout-grid">
         <a class="callout best" href="{{ best_link }}">
           <div class="label">🔺 최대 수익률</div>
           <div class="pct">{{ "{:+.2f}".format(best["profit_pct"]) }}%</div>
           <div class="final">최종자산 {{ "{:,.0f}".format(best["total"]) }}</div>
-          <div class="cond">매도 {{ best["sell_pct"] }}% ({{ best["sell_qty"] }}주) / 매수 {{ best["buy_pct"] }}% ({{ best["buy_qty"] }}주) / 매도횟수 {{ best["매도횟수"] }} / 매수횟수 {{ best["매수횟수"] }}</div>
+          <div class="cond">
+            상승gap {{ best["up_gap"] }}% / 하락gap {{ best["down_gap"] }}% / 수량 {{ best["qty_pct"] }}% ({{ best["qty"] }}주)<br>
+            매도 {{ best["매도횟수"] }}회 / 매수 {{ best["매수횟수"] }}회
+          </div>
         </a>
         <a class="callout worst" href="{{ worst_link }}">
           <div class="label">🔻 최소 수익률</div>
           <div class="pct">{{ "{:+.2f}".format(worst["profit_pct"]) }}%</div>
           <div class="final">최종자산 {{ "{:,.0f}".format(worst["total"]) }}</div>
-          <div class="cond">매도 {{ worst["sell_pct"] }}% ({{ worst["sell_qty"] }}주) / 매수 {{ worst["buy_pct"] }}% ({{ worst["buy_qty"] }}주) / 매도횟수 {{ worst["매도횟수"] }} / 매수횟수 {{ worst["매수횟수"] }}</div>
+          <div class="cond">
+            상승gap {{ worst["up_gap"] }}% / 하락gap {{ worst["down_gap"] }}% / 수량 {{ worst["qty_pct"] }}% ({{ worst["qty"] }}주)<br>
+            매도 {{ worst["매도횟수"] }}회 / 매수 {{ worst["매수횟수"] }}회
+          </div>
         </a>
       </div>
     </div>
@@ -346,19 +444,19 @@
         시작 자산 {{ "{:,.0f}".format(initial_asset) }} · 매매 안 했을 때 최종 자산 {{ "{:,.0f}".format(hold_only_asset) }}
       </p>
       <p class="sub" style="margin-bottom: 16px; font-size: 12px;">
-        수익률이 동일한 조합은 중복 제거되어 하나만 표시됩니다 (같은 수익률 중 매도수량%이 가장 작은 조합, 같으면 매수수량%이 가장 작은 조합을 노출). "보유 대비"는 매매 안 했을 때 최종 자산과 비교한 차이(%)입니다.
+        수익률이 동일한 조합은 중복 제거되어 하나만 표시됩니다. "보유 대비"는 매매 안 했을 때 최종 자산과 비교한 차이(%)입니다.
       </p>
       <div class="rank-grid">
         <div class="rank-col">
           <div class="rank-title up">🔺 상위 10</div>
           <table class="rank-table">
-            <thead><tr><th>#</th><th>매도%</th><th>매수%</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
+            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
             <tbody>
               {% for c in top10 %}
               <tr class="{{ 'best-row' if loop.index == 1 }}">
                 <td>{{ loop.index }}</td>
-                <td><a href="{{ c.link }}">{{ c.sell_pct }}%</a></td>
-                <td><a href="{{ c.link }}">{{ c.buy_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.x }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.y }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
                 <td class="up"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
@@ -370,13 +468,13 @@
         <div class="rank-col">
           <div class="rank-title down">🔻 하위 10</div>
           <table class="rank-table">
-            <thead><tr><th>#</th><th>매도%</th><th>매수%</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
+            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
             <tbody>
               {% for c in bottom10 %}
               <tr class="{{ 'worst-row' if loop.index == 1 }}">
                 <td>{{ loop.index }}</td>
-                <td><a href="{{ c.link }}">{{ c.sell_pct }}%</a></td>
-                <td><a href="{{ c.link }}">{{ c.buy_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.x }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.y }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
                 <td class="down"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
@@ -389,21 +487,21 @@
     </div>
 
     <div class="card">
-      <h2>히트맵 (세로: 매도수량 {{ sell_pcts[0] }}~{{ sell_pcts[-1] }}%, 가로: 매수수량 {{ buy_pcts[0] }}~{{ buy_pcts[-1] }}%)</h2>
+      <h2>히트맵 (세로: {{ x_label }} {{ xs[0] }}~{{ xs[-1] }}, 가로: {{ y_label }} {{ ys[0] }}~{{ ys[-1] }})</h2>
       <div class="heatmap-scroll">
         <div class="heatmap-outer">
-          <div class="axis-y-label">매도수량 (%) — 아래로 갈수록 큼</div>
+          <div class="axis-y-label">{{ x_label }} — 아래로 갈수록 큼</div>
           <div class="heatmap-col">
-            <div class="heatmap-grid" style="grid-template-columns: repeat({{ buy_pcts|length }}, 12px);">
+            <div class="heatmap-grid" style="grid-template-columns: repeat({{ ys|length }}, 12px);">
               {% for cell in cells %}
               <a class="heatmap-cell {% if cell.is_best %}best{% elif cell.is_worst %}worst{% endif %}"
                  href="{{ cell.link }}"
                  style="background-color: {{ cell.color }};"
-                 title="매도 {{ cell.sell_pct }}% / 매수 {{ cell.buy_pct }}% → {{ '{:+.2f}'.format(cell.pct) }}% (최종자산 {{ '{:,.0f}'.format(cell.total) }})">
+                 title="{{ x_label }} {{ cell.x }} / {{ y_label }} {{ cell.y }} → {{ '{:+.2f}'.format(cell.pct) }}% (최종자산 {{ '{:,.0f}'.format(cell.total) }})">
               </a>
               {% endfor %}
             </div>
-            <div class="axis-x-label">매수수량 (%, 시작 보유 주식수 대비) — 오른쪽으로 갈수록 큼</div>
+            <div class="axis-x-label">{{ y_label }} — 오른쪽으로 갈수록 큼</div>
           </div>
         </div>
       </div>
@@ -434,13 +532,13 @@
         </p>
         <div class="ranked-scroll">
           <table class="rank-table">
-            <thead><tr><th>#</th><th>매도%</th><th>매수%</th><th>매도횟수</th><th>매수횟수</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
+            <thead><tr><th>#</th><th>{{ x_label }}</th><th>{{ y_label }}</th><th>매도</th><th>매수</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
             <tbody>
               {% for c in ranked %}
               <tr class="{{ 'best-row' if loop.index == 1 }}{{ ' worst-row' if loop.index == ranked|length }}">
                 <td>{{ loop.index }}</td>
-                <td><a href="{{ c.link }}">{{ c.sell_pct }}%</a></td>
-                <td><a href="{{ c.link }}">{{ c.buy_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.x }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.y }}%</a></td>
                 <td><a href="{{ c.link }}">{{ c['매도횟수'] }}</a></td>
                 <td><a href="{{ c.link }}">{{ c['매수횟수'] }}</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
@@ -457,6 +555,8 @@
     <script>
       const RANK_CHART_DEDUP = {{ ranked | tojson }};
       const RANK_CHART_RAW = {{ ranked_raw | tojson }};
+      const X_LABEL = {{ x_label | tojson }};
+      const Y_LABEL = {{ y_label | tojson }};
 
       function toRankChartData(list) {
         return {
@@ -495,7 +595,7 @@
                 label: (item) => {
                   const c = rankChartSource[item.dataIndex];
                   const sign = c.profit_pct >= 0 ? '+' : '';
-                  return `${sign}${c.profit_pct.toFixed(2)}%  최종자산 ${Math.round(c.total).toLocaleString()}  (매도 ${c.sell_pct}% / 매수 ${c.buy_pct}% / 매도횟수 ${c['매도횟수']} / 매수횟수 ${c['매수횟수']})`;
+                  return `${sign}${c.profit_pct.toFixed(2)}%  최종자산 ${Math.round(c.total).toLocaleString()}  (${X_LABEL} ${c.x} / ${Y_LABEL} ${c.y} / 매도 ${c['매도횟수']} / 매수 ${c['매수횟수']})`;
                 }
               }
             }

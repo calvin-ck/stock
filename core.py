@@ -1114,6 +1114,386 @@ def compute_daily_gap_heatmap(
     }
 
 
+def _simulate_daily_reference(
+    prices: list,
+    dates,
+    trade_qty: int,
+    up_gap_percent: float,
+    down_gap_percent: float,
+    initial_shares: int,
+    allow_negative_cash: bool = False,
+    no_sell: bool = False,
+    no_buy: bool = False,
+    record_log: bool = False,
+) -> dict:
+    """
+    "일별 방향3" 전략의 실제 시뮬레이션 루프. daily_reference_strategy()와
+    _run_daily_reference_fast() 둘 다 이 함수를 사용해서 로직이 어긋나지 않게 한다.
+
+    규칙 (grid_trade_strategy()/daily_gap_strategy()와 달리 트레일링이 아니다)
+    ----
+    - 기준가는 첫날 종가로 시작하고, **매매가 일어날 때만** 그 거래가로 갱신된다. 매매가
+      없는 날에는 새 고점/저점을 찍어도 기준가가 전혀 움직이지 않는다.
+    - **매도**: 현재가가 기준가 대비 up_gap_percent% 이상 오르면 trade_qty만큼 매도하고
+      기준가를 그 매도가로 리셋한다. 보유 주식수가 trade_qty보다 적으면 건너뛴다(공매도
+      없음) — 이 경우 기준가도 갱신되지 않는다.
+    - **매수**: 현재가가 기준가 대비 down_gap_percent% 이상 내리면 매수를 시도한다.
+      allow_negative_cash=True면 현금과 무관하게 trade_qty를 그대로 매수하고(현금이
+      마이너스가 될 수 있음), False(기본)면 "쌓인 현금으로 살 수 있는 만큼"과 trade_qty 중
+      작은 값만큼만 매수한다. 매수 신호가 뜨면 실제로 살 수 있었는지와 무관하게 기준가를
+      그 시점 가격으로 갱신한다 (현금 부족으로 못 샀다고 옛 기준가가 계속 남으면 이후 작은
+      반등에도 매수 조건이 계속 참이 되는 문제를 막기 위함 — 다른 전략들과 동일한 이유).
+    - 기준가가 하나뿐이고 상승/하락 조건이 서로 반대 방향이라, 하루에 매도·매수가 동시에
+      발생하는 일이 애초에 있을 수 없다 (grid_trade_strategy()의 "전날 대비" 게이트가
+      필요 없는 이유).
+
+    record_log : True면 매매일지/자산추이를 기록해서 반환한다 (느림). False면 최종 결과만
+        계산한다 (빠름, 히트맵처럼 수천 번 반복 계산할 때 사용).
+    """
+    up_ratio = up_gap_percent / 100.0
+    down_ratio = down_gap_percent / 100.0
+    base_price = prices[0]
+    shares = initial_shares
+    cash = 0.0
+    sell_count = 0
+    buy_count = 0
+    trade_log = [] if record_log else None
+    asset_log = [] if record_log else None
+
+    if record_log:
+        asset_log.append({
+            "날짜": dates[0], "주가": prices[0], "현금": cash, "보유주식수": shares,
+            "주식평가금액": prices[0] * shares, "total": prices[0] * shares + cash,
+        })
+
+    for i in range(1, len(prices)):
+        price = prices[i]
+        date = dates[i] if dates is not None else None
+        base_snapshot = base_price
+
+        # 매도: 기준가 대비 up_gap% 이상 상승
+        if not no_sell and price >= base_snapshot * (1 + up_ratio) and shares >= trade_qty:
+            shares -= trade_qty
+            cash += trade_qty * price
+            base_price = price
+            sell_count += 1
+            if record_log:
+                hold_only_asset = initial_shares * price
+                trade_log.append({
+                    "날짜": date, "구분": "매도", "가격": price, "수량": trade_qty,
+                    "현금잔고": cash, "보유주식수": shares, "주식평가금액": price * shares,
+                    "기준가": base_snapshot,
+                    "등락률": (price - base_snapshot) / base_snapshot * 100,
+                    "매매안했을때자산": hold_only_asset,
+                    "차이": (price * shares + cash) - hold_only_asset,
+                })
+
+        # 매수: 기준가 대비 down_gap% 이상 하락
+        if not no_buy and price <= base_snapshot * (1 - down_ratio):
+            if allow_negative_cash:
+                buy_qty = trade_qty
+            else:
+                affordable_qty = int(cash // price) if price > 0 else 0
+                buy_qty = min(trade_qty, affordable_qty)
+
+            base_price = price
+            if buy_qty > 0:
+                shares += buy_qty
+                cash -= buy_qty * price
+                buy_count += 1
+                if record_log:
+                    hold_only_asset = initial_shares * price
+                    trade_log.append({
+                        "날짜": date, "구분": "매수", "가격": price, "수량": buy_qty,
+                        "현금잔고": cash, "보유주식수": shares, "주식평가금액": price * shares,
+                        "기준가": base_snapshot,
+                        "등락률": (price - base_snapshot) / base_snapshot * 100,
+                        "매매안했을때자산": hold_only_asset,
+                        "차이": (price * shares + cash) - hold_only_asset,
+                    })
+
+        if record_log:
+            asset_log.append({
+                "날짜": date, "주가": price, "현금": cash, "보유주식수": shares,
+                "주식평가금액": price * shares, "total": price * shares + cash,
+            })
+
+    final_price = prices[-1]
+    stock_value = shares * final_price
+
+    return {
+        "주가": final_price,
+        "보유주식수": shares,
+        "주식_평가금액": stock_value,
+        "현금": cash,
+        "total": stock_value + cash,
+        "매도횟수": sell_count,
+        "매수횟수": buy_count,
+        "매매일지": trade_log if record_log else [],
+        "자산추이": asset_log if record_log else [],
+    }
+
+
+def daily_reference_strategy(
+    df: pd.DataFrame,
+    trade_qty: int,
+    up_gap_percent: float,
+    down_gap_percent: float = None,
+    initial_shares: int = 100,
+    allow_negative_cash: bool = False,
+    no_sell: bool = False,
+    no_buy: bool = False,
+    price_col: str = "종가",
+    date_col: str = "날짜",
+) -> dict:
+    """
+    "일별 방향3" 전략 — 정적인 **기준가** 방식. 첫날 종가를 기준가로 시작해서, 현재가가
+    기준가 대비 up_gap_percent% 이상 오르면 매도, down_gap_percent% 이상 내리면 매수한다.
+    매매가 일어날 때만 기준가가 그 거래가로 갱신되고(트레일링 고점/저점을 계속 따라가는
+    grid_trade_strategy()/daily_gap_strategy()와 달리, 매매 없이는 절대 움직이지 않는다),
+    나머지 규칙(현금 부족 시 처리, 공매도 금지 등)은 다른 전략들과 동일하다.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        get_stock_data()로 얻은 일별 시세. 날짜 오름차순/내림차순 상관없이 내부에서 정렬함.
+    trade_qty : int
+        매도/매수 공통 거래 수량 (보통 resolve_trade_qty()로 시작 보유 주식수 대비 %에서
+        계산해서 넘긴다).
+    up_gap_percent : float
+        매도를 촉발하는 기준가 대비 상승폭(%) 임계값.
+    down_gap_percent : float, optional
+        매수를 촉발하는 기준가 대비 하락폭(%) 임계값. 비워두면(None) up_gap_percent와
+        동일한 값을 사용한다.
+    initial_shares : int
+        시작 보유 주식 수 (기본 100)
+    allow_negative_cash : bool
+        True면 현금 잔고와 무관하게 매수 수량을 그대로 매수한다 (현금이 마이너스가 될 수
+        있음). False(기본)면 쌓인 현금 범위 내에서만 매수한다.
+    no_sell : bool
+        True면 매도를 하지 않는다 (매수는 정상 동작, 기본 False)
+    no_buy : bool
+        True면 매수를 하지 않는다 (매도는 정상 동작, 기본 False)
+    price_col : str
+        기준으로 삼을 가격 컬럼명 (기본 '종가')
+    date_col : str
+        날짜 컬럼명 (기본 '날짜'), 매매일지에 사용
+
+    Returns
+    -------
+    dict
+        {
+            "주가": 마지막 날 가격,
+            "보유주식수": 최종 보유 주식 수,
+            "주식_평가금액": 보유주식수 * 마지막 날 가격,
+            "현금": 최종 현금,
+            "total": 주식_평가금액 + 현금,
+            "매도횟수": ...,
+            "매수횟수": ...,
+            "매매일지": [{"날짜":..., "구분":"매도/매수", "가격":..., "수량":...,
+                       "현금잔고":..., "보유주식수":..., "주식평가금액":...,
+                       "기준가": 그 거래를 판단할 때 쓰인 기준가 스냅샷,
+                       "등락률": (가격-기준가)/기준가*100,
+                       "매매안했을때자산":..., "차이":...}, ...],
+            "자산추이": [...],  # 첫날부터 마지막 날까지 매일의 스냅샷 (그래프용)
+        }
+    """
+    if df.empty:
+        raise ValueError("데이터가 없습니다.")
+    if up_gap_percent <= 0:
+        raise ValueError("상승 gap은 0보다 커야 합니다.")
+    down_gap = down_gap_percent if down_gap_percent is not None else up_gap_percent
+    if down_gap <= 0:
+        raise ValueError("하락 gap은 0보다 커야 합니다.")
+
+    sorted_df = df.sort_values(date_col).reset_index(drop=True)
+    dates = sorted_df[date_col].tolist()
+    prices = sorted_df[price_col].tolist()
+
+    return _simulate_daily_reference(
+        prices, dates, trade_qty, up_gap_percent, down_gap, initial_shares,
+        allow_negative_cash=allow_negative_cash, no_sell=no_sell, no_buy=no_buy,
+        record_log=True,
+    )
+
+
+def _run_daily_reference_fast(
+    prices: list,
+    trade_qty: int,
+    up_gap_percent: float,
+    down_gap_percent: float,
+    initial_shares: int = 100,
+    allow_negative_cash: bool = False,
+    no_sell: bool = False,
+    no_buy: bool = False,
+) -> dict:
+    """
+    daily_reference_strategy()와 완전히 동일한 로직이지만, 매매일지를 기록하지 않아 수천 번
+    반복 계산(히트맵용)할 때 빠르게 동작한다.
+    """
+    return _simulate_daily_reference(
+        prices, None, trade_qty, up_gap_percent, down_gap_percent, initial_shares,
+        allow_negative_cash=allow_negative_cash, no_sell=no_sell, no_buy=no_buy,
+        record_log=False,
+    )
+
+
+DAILY3_HEATMAP_FEATURES = {
+    "up_gap": {"label": "상승gap (%)", "sweep_default": (1, 50), "fixed_default": 5},
+    "down_gap": {"label": "하락gap (%)", "sweep_default": (1, 50), "fixed_default": None},
+    "qty_pct": {"label": "매도/매수 수량 (%)", "sweep_default": (1, 50), "fixed_default": 10},
+}
+
+
+def compute_daily_reference_heatmap_2d(
+    df: pd.DataFrame,
+    x_feature: str,
+    x_values,
+    y_feature: str,
+    y_values,
+    fixed: dict,
+    initial_shares: int = 100,
+    allow_negative_cash: bool = False,
+    price_col: str = "종가",
+    date_col: str = "날짜",
+    no_sell: bool = False,
+    no_buy: bool = False,
+) -> dict:
+    """
+    DAILY3_HEATMAP_FEATURES의 3개 피쳐(상승gap/하락gap/매도매수수량) 중 2개를 x/y 축으로
+    골라 그 조합별 수익률을 계산하는 daily_reference_strategy() 전용 통합 히트맵.
+    `compute_profit_heatmap_2d()`와 같은 패턴이다.
+
+    **하락gap 미러링**: 하락gap이 축으로 선택되지 않았고 fixed에도 값이 없으면(키가
+    없거나 None), daily_reference_strategy()의 기본 동작과 똑같이 그 셀의 상승gap 값을
+    그대로 하락gap으로 쓴다("하락gap을 비우면 상승gap과 동일하게 취급"). 상승gap은 자기
+    자신이 기준이 되는 값이라 미러링할 대상이 없으므로, 상승gap이 축이 아니면 fixed에
+    반드시 값이 있어야 한다(qty_pct도 마찬가지로 축이 아니면 fixed 필수).
+
+    Parameters
+    ----------
+    x_feature, y_feature : str
+        DAILY3_HEATMAP_FEATURES의 키 중 하나씩, 서로 달라야 한다
+        ("up_gap", "down_gap", "qty_pct").
+    x_values, y_values : iterable[float]
+        각 축으로 스윕할 값 목록.
+    fixed : dict
+        x_feature/y_feature가 아닌 나머지 한 피쳐의 고정값. 그 피쳐가 "down_gap"이면
+        생략(또는 None)해서 위의 미러링을 쓸 수 있다.
+    allow_negative_cash, no_sell, no_buy : daily_reference_strategy() 참고
+
+    Returns
+    -------
+    dict
+        {
+            "x_feature": ..., "y_feature": ..., "xs": [...], "ys": [...],
+            "grid": [[y별 수익률(%), ...], ...],  # grid[i][j] = xs[i] x ys[j] 조합
+            "best": {"x":..., "y":..., "up_gap":..., "down_gap":..., "qty_pct":..., "qty":...,
+                     "profit_pct":..., "total":..., "매수횟수":..., "매도횟수":...},
+            "worst": {...동일 구조...},
+            "top10": [...], "bottom10": [...], "ranked": [...], "raw_ranked": [...],
+            "initial_asset": 시작 자산, "hold_only_asset": 매매 안 했을 때 최종 자산,
+            "fixed": 실제로 적용된 고정값 dict (x_feature/y_feature 제외 나머지 1개),
+        }
+
+    top10/bottom10/ranked는 수익률이 같은 조합이 여러 개면 그중 하나만 남긴다(중복 제거).
+    남기는 기준: x가 가장 작은 조합 우선, x도 같으면 y가 가장 작은 조합.
+    """
+    if df.empty:
+        raise ValueError("데이터가 없습니다.")
+    if x_feature == y_feature:
+        raise ValueError("x축과 y축은 서로 다른 항목이어야 합니다.")
+    if x_feature not in DAILY3_HEATMAP_FEATURES or y_feature not in DAILY3_HEATMAP_FEATURES:
+        raise ValueError("알 수 없는 히트맵 축입니다.")
+
+    fixed_feature = next(f for f in DAILY3_HEATMAP_FEATURES if f not in (x_feature, y_feature))
+    if fixed_feature != "down_gap" and fixed.get(fixed_feature) is None:
+        raise ValueError(f"{DAILY3_HEATMAP_FEATURES[fixed_feature]['label']} 고정값을 입력해주세요.")
+
+    sorted_df = df.sort_values(date_col)
+    prices = sorted_df[price_col].tolist()
+
+    first_price = prices[0]
+    initial_asset = initial_shares * first_price
+    hold_only_asset = initial_shares * prices[-1]
+
+    xs = list(x_values)
+    ys = list(y_values)
+
+    grid = []
+    all_combos = []
+    best = {"x": None, "y": None, "profit_pct": float("-inf")}
+    worst = {"x": None, "y": None, "profit_pct": float("inf")}
+
+    for xv in xs:
+        row = []
+        for yv in ys:
+            params = dict(fixed)
+            params[x_feature] = xv
+            params[y_feature] = yv
+
+            up_gap_val = params["up_gap"]
+            down_gap_val = params.get("down_gap")
+            if down_gap_val is None:
+                down_gap_val = up_gap_val  # 하락gap 미러링
+            qty_val = params["qty_pct"]
+
+            resolved_qty = resolve_trade_qty(initial_shares, qty_val)
+            run_result = _run_daily_reference_fast(
+                prices, trade_qty=resolved_qty, up_gap_percent=up_gap_val,
+                down_gap_percent=down_gap_val, initial_shares=initial_shares,
+                allow_negative_cash=allow_negative_cash, no_sell=no_sell, no_buy=no_buy,
+            )
+            total = run_result["total"]
+            profit_pct = (total - initial_asset) / initial_asset * 100 if initial_asset else 0.0
+            row.append(profit_pct)
+            combo = {
+                "x": xv, "y": yv, "profit_pct": profit_pct, "total": total,
+                "매매안했을때자산": hold_only_asset, "차이": total - hold_only_asset,
+                "up_gap": up_gap_val, "down_gap": down_gap_val,
+                "qty_pct": qty_val, "qty": resolved_qty,
+                "매수횟수": run_result["매수횟수"], "매도횟수": run_result["매도횟수"],
+            }
+            all_combos.append(combo)
+            if profit_pct > best["profit_pct"]:
+                best = combo
+            if profit_pct < worst["profit_pct"]:
+                worst = combo
+        grid.append(row)
+
+    seen_profit_pct = set()
+    dedup_combos = []
+    for combo in all_combos:
+        key = round(combo["profit_pct"], 6)
+        if key in seen_profit_pct:
+            continue
+        seen_profit_pct.add(key)
+        dedup_combos.append(combo)
+
+    dedup_combos.sort(key=lambda c: c["profit_pct"], reverse=True)
+    top10 = dedup_combos[:10]
+    bottom10 = list(reversed(dedup_combos[-10:]))
+    ranked = dedup_combos
+    raw_ranked = sorted(all_combos, key=lambda c: c["profit_pct"], reverse=True)
+
+    return {
+        "x_feature": x_feature,
+        "y_feature": y_feature,
+        "xs": xs,
+        "ys": ys,
+        "grid": grid,
+        "best": best,
+        "worst": worst,
+        "top10": top10,
+        "bottom10": bottom10,
+        "ranked": ranked,
+        "raw_ranked": raw_ranked,
+        "initial_asset": initial_asset,
+        "hold_only_asset": hold_only_asset,
+        "fixed": fixed,
+    }
+
+
 def compute_daily_heatmap(
     df: pd.DataFrame,
     sell_qty_pct_values,
@@ -1700,6 +2080,172 @@ def compute_profit_heatmap_2d(
         "initial_asset": initial_asset,
         "hold_only_asset": hold_only_asset,
         "fixed": fixed,
+    }
+
+
+def _detect_streaks(daily_rows: list, closes: list) -> tuple:
+    """daily_rows(1번째 날부터의 등락률/방향 목록)와 closes(0번째부터의 전체 종가)를 보고
+    연속 상승/연속 하락 구간을 각각 뽑아, 구간별 {길이, 평균등락률, 총등락률}을 반환한다
+    ('보합'은 연속을 끊는다).
+
+    - 평균등락률: 그 구간에 속한 날들의 일별 등락률(%) 평균 — 구간의 "하루 평균 기세".
+    - 총등락률: 그 구간 시작 전날 종가 대비 마지막 날 종가의 실제 등락률(%) — 일별 등락률을
+      단순 합산한 근사치가 아니라, 실제 가격 두 점으로 계산한 "그 구간 전체의 진짜 등락폭"이다.
+    """
+    up_streaks, down_streaks = [], []
+    cur_dir, start_idx, cur_pcts = None, None, []
+
+    def _flush(end_idx):
+        target = up_streaks if cur_dir == "up" else down_streaks if cur_dir == "down" else None
+        if target is None:
+            return
+        prev_close = closes[start_idx - 1]
+        total_pct = (closes[end_idx] - prev_close) / prev_close * 100 if prev_close else 0.0
+        target.append({
+            "length": len(cur_pcts),
+            "평균등락률": sum(cur_pcts) / len(cur_pcts),
+            "총등락률": total_pct,
+        })
+
+    for i, row in enumerate(daily_rows):
+        idx = i + 1  # closes 인덱스 (daily_rows[i]는 closes[i+1] 시점)
+        d = row["방향"]
+        if d == cur_dir and d in ("up", "down"):
+            cur_pcts.append(row["등락률"])
+        else:
+            if cur_dir in ("up", "down"):
+                _flush(idx - 1)
+            cur_dir = d if d in ("up", "down") else None
+            cur_pcts = [row["등락률"]] if cur_dir else []
+            start_idx = idx if cur_dir else None
+    if cur_dir in ("up", "down"):
+        _flush(len(closes) - 1)
+
+    return up_streaks, down_streaks
+
+
+def _histogram(values: list, ndigits: int = None) -> list:
+    """values를 (ndigits가 주어지면 그 자리에서 반올림한 뒤) 값별 개수로 집계하고,
+    최솟값~최댓값 사이를 빈틈없이 채운 (값, 개수) 목록으로 반환한다 (빈 구간은 0개).
+    정수 값(연속 일수 등)은 ndigits=None으로 그대로 집계한다."""
+    if not values:
+        return []
+    if ndigits is not None:
+        step = 10 ** (-ndigits)
+        rounded = [round(round(v, ndigits) / step) for v in values]  # 정수 단위로 환산
+    else:
+        step = 1
+        rounded = [round(v) for v in values]
+
+    counts = {}
+    for r in rounded:
+        counts[r] = counts.get(r, 0) + 1
+
+    lo, hi = min(counts), max(counts)
+    return [(round(k * step, ndigits) if ndigits is not None else k, counts.get(k, 0))
+            for k in range(lo, hi + 1)]
+
+
+def _streak_length_agg(streaks: list) -> dict:
+    """streaks(길이별 {length, 평균등락률, 총등락률} 목록)를 같은 length끼리 묶어,
+    길이별 대표값을 계산해 길이 오름차순으로 반환한다.
+
+    "합계평균"/"합계최대"는 서로 다른 구간들끼리 더한 값이 아니라, **구간 하나 안에서**
+    그 구간에 속한 날들의 등락률을 합친 값(예: 2일 연속 상승이면 그 2일의 등락률 합)을
+    기준으로 삼는다 — 이게 `총등락률`(구간 시작 전날 종가 대비 마지막 날 종가로 계산,
+    복리까지 정확히 반영)이다. 같은 길이의 구간이 여러 개 있으면:
+    - `합계평균`: "1일평균"과 똑같은 방식으로, 그 구간들의 `총등락률`을 서로 더하지 않고
+      **평균**을 내서 하나의 대표값으로 만든다 — "1일평균"이 여러 구간의 `평균등락률`을
+      평균 내는 것과 대칭이다.
+    - `합계최대`: 그 길이 구간들의 `총등락률` 중 **절댓값이 가장 큰 값**을 그대로 뽑는다
+      (상승 구간은 항상 양수라 곧 최댓값, 하락 구간은 항상 음수라 곧 최솟값 = 가장 큰
+      낙폭 — `compute_price_stats`의 "하락최대등락률"과 같은 규칙).
+
+    구간이 하나도 없는 길이는 건너뛴다(0으로 채우면 실제로 관측되지 않은 길이가
+    관측된 것처럼 line/bar에 찍혀 오해를 줄 수 있다)."""
+    if not streaks:
+        return {"lengths": [], "1일평균": [], "합계평균": [], "합계최대": [], "건수": []}
+
+    groups = {}
+    for s in streaks:
+        g = groups.setdefault(s["length"], {"avg_sum": 0.0, "total_sum": 0.0, "count": 0, "totals": []})
+        g["avg_sum"] += s["평균등락률"]
+        g["total_sum"] += s["총등락률"]
+        g["count"] += 1
+        g["totals"].append(s["총등락률"])
+
+    lengths = sorted(groups)
+    return {
+        "lengths": lengths,
+        "1일평균": [groups[l]["avg_sum"] / groups[l]["count"] for l in lengths],
+        "합계평균": [groups[l]["total_sum"] / groups[l]["count"] for l in lengths],
+        "합계최대": [max(groups[l]["totals"], key=abs) for l in lengths],
+        "건수": [groups[l]["count"] for l in lengths],
+    }
+
+
+def compute_price_stats(df: pd.DataFrame, pct_round_ndigits: int = 0) -> dict:
+    """
+    전날 종가 대비 상승/하락/보합 일수, 연속 상승/하락(streak) 일수 분포, 상승일/하락일
+    각각의 등락률(%) 분포, 그리고 연속 일수별 평균/합계 등락률을 계산한다. gap이나 매매
+    로직과 무관한 순수 가격 통계다.
+
+    pct_round_ndigits : 상승일/하락일 등락률(%) 1D 히스토그램을 만들 때 반올림할 소수
+        자리수 (기본 0자리, 정수 1%p 단위).
+    """
+    sorted_df = df.sort_values("날짜").reset_index(drop=True)
+    closes = sorted_df["종가"].tolist()
+    dates = sorted_df["날짜"].tolist()
+
+    up_pcts, down_pcts = [], []
+    daily_rows = []  # 날짜별 등락률/방향 (템플릿에서 표/차트에 쓸 수 있게 함께 반환)
+    for i in range(1, len(closes)):
+        prev, cur = closes[i - 1], closes[i]
+        pct = (cur - prev) / prev * 100 if prev else 0.0
+        if cur > prev:
+            direction = "up"
+            up_pcts.append(pct)
+        elif cur < prev:
+            direction = "down"
+            down_pcts.append(pct)
+        else:
+            direction = "flat"
+        daily_rows.append({"날짜": dates[i], "등락률": pct, "방향": direction})
+
+    up_streaks, down_streaks = _detect_streaks(daily_rows, closes)
+    up_streak_lengths = [s["length"] for s in up_streaks]
+    down_streak_lengths = [s["length"] for s in down_streaks]
+
+    total_days = len(daily_rows)
+    up_days, down_days = len(up_pcts), len(down_pcts)
+    flat_days = total_days - up_days - down_days
+
+    def _avg(values):
+        return sum(values) / len(values) if values else 0.0
+
+    return {
+        "총일수": total_days,
+        "상승일수": up_days,
+        "하락일수": down_days,
+        "보합일수": flat_days,
+        "상승비율": up_days / total_days * 100 if total_days else 0.0,
+        "하락비율": down_days / total_days * 100 if total_days else 0.0,
+        "상승평균등락률": _avg(up_pcts),
+        "하락평균등락률": _avg(down_pcts),
+        "상승최대등락률": max(up_pcts) if up_pcts else 0.0,
+        "하락최대등락률": min(down_pcts) if down_pcts else 0.0,
+        "상승연속최대": max(up_streak_lengths) if up_streak_lengths else 0,
+        "하락연속최대": max(down_streak_lengths) if down_streak_lengths else 0,
+        "상승연속평균": _avg(up_streak_lengths),
+        "하락연속평균": _avg(down_streak_lengths),
+        "상승연속분포": _histogram(up_streak_lengths),
+        "하락연속분포": _histogram(down_streak_lengths),
+        "상승등락률분포": _histogram(up_pcts, pct_round_ndigits),
+        "하락등락률분포": _histogram(down_pcts, pct_round_ndigits),
+        "round_ndigits": pct_round_ndigits,
+        "상승연속_길이별": _streak_length_agg(up_streaks),
+        "하락연속_길이별": _streak_length_agg(down_streaks),
+        "daily_rows": daily_rows,
     }
 
 

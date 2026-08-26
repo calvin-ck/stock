@@ -1,0 +1,6 @@
+{# 로컬에 없거나 부족해서 네이버에서 새로 가져왔을 때 안내 문구. context의 fetch_note에서 온다. #}
+{% if fetch_note %}
+<div style="background:#fff4e0;color:#8a5a00;padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:13px;">
+  ℹ️ {{ fetch_note }}
+</div>
+{% endif %}

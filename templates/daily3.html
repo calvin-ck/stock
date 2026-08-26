@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>일별 방향 매매 백테스트</title>
+<title>일별 방향3 백테스트</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
@@ -103,6 +103,12 @@
     font-size: 13px; color: var(--text); white-space: nowrap;
   }
   .checkbox-field input[type="checkbox"] { width: 16px; height: 16px; }
+  .option-badges { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .option-badges .badge {
+    font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    background: var(--bg); color: var(--muted); border: 1px solid var(--border);
+  }
+  .option-badges .badge.warn { color: var(--up); border-color: #f6c6c6; background: #fdecec; }
 
   .empty {
     background: var(--card);
@@ -181,45 +187,43 @@
   }
   .chart-toggle-line input[type="checkbox"] { width: 14px; height: 14px; }
   .chart-toggle-line .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-  .option-badges { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
-  .option-badges .badge {
-    font-size: 12px; padding: 4px 10px; border-radius: 999px;
-    background: var(--bg); color: var(--muted); border: 1px solid var(--border);
-  }
-  .option-badges .badge.warn { color: #92400e; background: #fef3c7; border-color: #fde68a; }
 </style>
 </head>
 <body>
 <div class="wrap">
   {% include "_nav.html" %}
-  <h1>📅 일별 방향 매매 백테스트</h1>
+  <h1>📅3️⃣ 일별 방향3 백테스트</h1>
   <p class="sub">
-    gap이나 고점/저점 추적 없이 아주 단순한 규칙으로 매일 매매합니다:
-    <b>전날 종가보다 오르면 매도</b>, <b>내리면 매수</b>합니다 (같으면 아무 것도 안 함).
-    매도/매수 수량은 시작 보유 주식수 대비 <b>%</b>로 정합니다. 매도는 보유 주식수가
-    모자라면 건너뜁니다 (공매도 없음). <b>현금 부족해도 매수</b>를 체크하면 현금 잔고와
-    무관하게 항상 그대로 매수하고(현금이 마이너스가 될 수 있음), 체크하지 않으면 쌓인 현금
-    범위 내에서만 매수합니다. <b>시작 자산보다 높을 때만 팔기</b>를 체크하면 전날보다
-    올랐어도 그 시점 평가자산(주식평가금액+현금)이 시작 자산을 아직 회복하지 못했으면
-    매도하지 않습니다.
+    정적인 <b>기준가</b> 기준입니다: 현재가가 <b>기준가에서 상승gap% 이상 오르면 매도</b>,
+    <b>기준가에서 하락gap% 이상 내리면 매수</b>합니다. 기준가는 첫날 종가로 시작해서,
+    <b>매매가 일어날 때만</b> 그 거래가로 갱신됩니다 — 그리드 매매·일별 매매2처럼 매일
+    새 고점/저점을 계속 따라가며 갱신되는 트레일링 방식이 아니라, 매매가 없으면 전혀
+    움직이지 않는 가장 단순한 방식입니다. 하락gap을 비워두면 상승gap과 동일하게
+    취급합니다. 매도/매수 수량은 <b>하나의 값</b>(시작 보유 주식수 대비 %)을 공유합니다.
+    <b>현금 부족해도 매수</b>를 체크하면 현금 잔고와 무관하게 항상 그대로 매수하고(현금이
+    마이너스가 될 수 있음), 체크하지 않으면 쌓인 현금 범위 내에서만 매수합니다. 매도는
+    보유 주식수가 모자라면 건너뜁니다 (공매도 없음).
   </p>
 
   {% if files %}
-  <form method="get" action="/daily" id="dailyForm">
+  <form method="get" action="/daily3" id="daily3Form">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
-      <input type="hidden" name="submitted" value="1">
       <div class="field">
         <label for="init_shares">시작 보유 주식수</label>
         <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
       </div>
       <div class="field">
-        <label for="sell_qty_pct">매도 수량 (%) <span class="hint">시작 보유 주식수 대비</span></label>
-        <input type="number" name="sell_qty_pct" id="sell_qty_pct" step="0.1" min="0.1" value="{{ sell_qty_pct }}" required>
+        <label for="up_gap_pct">상승 gap (%)</label>
+        <input type="number" name="up_gap_pct" id="up_gap_pct" step="0.1" min="0.1" value="{{ up_gap_pct }}" required>
       </div>
       <div class="field">
-        <label for="buy_qty_pct">매수 수량 (%) <span class="hint">시작 보유 주식수 대비</span></label>
-        <input type="number" name="buy_qty_pct" id="buy_qty_pct" step="0.1" min="0.1" value="{{ buy_qty_pct }}" required>
+        <label for="down_gap_pct">하락 gap (%) <span class="hint">비우면 상승gap과 동일</span></label>
+        <input type="number" name="down_gap_pct" id="down_gap_pct" step="0.1" min="0.1" value="{{ down_gap_pct }}" placeholder="상승gap과 동일">
+      </div>
+      <div class="field">
+        <label for="qty_pct">매수/매도 수량 (%) <span class="hint">시작 보유 주식수 대비</span></label>
+        <input type="number" name="qty_pct" id="qty_pct" step="0.1" min="0.1" value="{{ qty_pct }}" required>
       </div>
       <div class="field checkbox-field">
         <label>
@@ -229,14 +233,19 @@
       </div>
       <div class="field checkbox-field">
         <label>
-          <input type="checkbox" name="sell_above_start_asset_only" value="on" {% if sell_above_start_asset_only %}checked{% endif %}>
-          시작 자산보다 높을 때만 팔기
+          <input type="checkbox" name="no_sell" value="on" {% if no_sell %}checked{% endif %}>
+          매도 안 함
+        </label>
+      </div>
+      <div class="field checkbox-field">
+        <label>
+          <input type="checkbox" name="no_buy" value="on" {% if no_buy %}checked{% endif %}>
+          매수 안 함
         </label>
       </div>
       <button type="submit">계산</button>
     </div>
   </form>
-
   {% else %}
   <div class="empty">
     저장된 데이터가 없습니다. <a href="/">메인 페이지</a>에서 종목을 먼저 조회해주세요.<br>
@@ -253,15 +262,15 @@
   {% if summary %}
     <div class="card">
       <h2>
-        {{ code }} — 매도 {{ sell_qty_pct }}% ({{ "{:,}".format(sell_qty) }}주) /
-        매수 {{ buy_qty_pct }}% ({{ "{:,}".format(buy_qty) }}주) /
-        시작 {{ "{:,}".format(init_shares|int) }}주
+        {{ code }} — 상승gap {{ up_gap_pct }}% / 하락gap {{ "{:g}".format(effective_down_gap) }}%
+        / 수량 {{ qty_pct }}% ({{ "{:,}".format(qty) }}주) / 시작 {{ "{:,}".format(init_shares|int) }}주
         ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분)
       </h2>
-      {% if allow_negative_cash or sell_above_start_asset_only %}
+      {% if allow_negative_cash or no_sell or no_buy %}
       <div class="option-badges">
         {% if allow_negative_cash %}<span class="badge warn">⚠️ 현금 부족해도 매수</span>{% endif %}
-        {% if sell_above_start_asset_only %}<span class="badge">🔺 시작 자산보다 높을 때만 팔기</span>{% endif %}
+        {% if no_sell %}<span class="badge">🔻 매도 안 함</span>{% endif %}
+        {% if no_buy %}<span class="badge">🔺 매수 안 함</span>{% endif %}
       </div>
       {% endif %}
       <div class="summary-grid">
@@ -290,7 +299,7 @@
       <div class="summary-grid">
         <div class="stat">
           <div class="label">현금</div>
-          <div class="value {{ 'down' if summary['현금'] < 0 }}">{{ "{:,.0f}".format(summary["현금"]) }}</div>
+          <div class="value">{{ "{:,.0f}".format(summary["현금"]) }}</div>
         </div>
         <div class="stat">
           <div class="label">주식 평가금액</div>
@@ -360,6 +369,8 @@
             <tr>
               <th>날짜</th>
               <th>구분</th>
+              <th>기준가</th>
+              <th>등락률</th>
               <th>가격</th>
               <th>수량</th>
               <th>현금잔고</th>
@@ -374,6 +385,8 @@
             <tr>
               <td>{{ row["날짜"] }}</td>
               <td class="{{ 'sell' if row['구분'] == '매도' else 'buy' }}">{{ row["구분"] }}</td>
+              <td>{{ "{:,.0f}".format(row["기준가"]) }}</td>
+              <td class="{{ 'sell' if row['구분'] == '매도' else 'buy' }}">{{ "{:+.2f}".format(row["등락률"]) }}%</td>
               <td>{{ "{:,.0f}".format(row["가격"]) }}</td>
               <td>{{ row["수량"] }}</td>
               <td>{{ "{:,.0f}".format(row["현금잔고"]) }}</td>

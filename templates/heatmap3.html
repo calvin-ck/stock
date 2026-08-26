@@ -284,22 +284,7 @@
   {% if files %}
   <form method="get" action="/heatmap3" id="heatmapForm">
     <div class="form-row">
-      <div class="field">
-        <label for="group_select">종목 데이터</label>
-        <select id="group_select" required>
-          <option value="">선택하세요</option>
-          {% for g in groups %}
-          <option value="{{ g.code }}">{{ g.code }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field">
-        <label for="date_select">생성일자</label>
-        <select id="date_select" required disabled>
-          <option value="">종목을 먼저 선택하세요</option>
-        </select>
-      </div>
-      <input type="hidden" name="file" id="file" value="{{ selected_file }}">
+      {% include "_csv_file_selector.html" %}
 
       <div class="field checkbox-field">
         <label>
@@ -407,55 +392,6 @@
   </form>
 
   <script>
-    // 종목코드 -> [{filename, created_display, days}, ...] 매핑 (생성일자 최신순 정렬됨)
-    const CSV_GROUPS = {{ groups | tojson }};
-    const groupMap = {};
-    CSV_GROUPS.forEach(g => { groupMap[g.code] = g.items; });
-
-    const groupSelect = document.getElementById('group_select');
-    const dateSelect = document.getElementById('date_select');
-    const fileInput = document.getElementById('file');
-
-    function populateDateSelect(key, preselectFilename) {
-      dateSelect.innerHTML = '';
-      const items = groupMap[key] || [];
-      if (items.length === 0) {
-        dateSelect.disabled = true;
-        dateSelect.innerHTML = '<option value="">데이터 없음</option>';
-        return;
-      }
-      dateSelect.disabled = false;
-      items.forEach(item => {
-        const opt = document.createElement('option');
-        opt.value = item.filename;
-        opt.textContent = item.created_display + ' (' + item.days + '일)';
-        if (item.filename === preselectFilename) opt.selected = true;
-        dateSelect.appendChild(opt);
-      });
-      fileInput.value = dateSelect.value;
-    }
-
-    groupSelect.addEventListener('change', () => populateDateSelect(groupSelect.value, null));
-    dateSelect.addEventListener('change', () => { fileInput.value = dateSelect.value; });
-
-    // 기존 선택값(재조회/폼 재제출 시)이 있으면 그걸, 없으면 가장 최근에 생성된 CSV를 기본값으로 복원
-    const preselected = "{{ selected_file }}" || "{{ default_file }}";
-    if (preselected) {
-      const parts = preselected.match(/^(\d+)_/);
-      if (parts) {
-        const key = parts[1];
-        groupSelect.value = key;
-        populateDateSelect(key, preselected);
-      }
-    }
-
-    document.getElementById('heatmapForm').addEventListener('submit', (e) => {
-      if (!fileInput.value) {
-        e.preventDefault();
-        alert('종목과 생성일자를 모두 선택해주세요.');
-      }
-    });
-
     // X축/Y축 선택에 따라 각 피쳐의 스윕(min/max) 입력과 고정값 입력을 보이거나 숨긴다.
     // 같은 피쳐를 X/Y 양쪽에 고르면 자동으로 서로 바꿔치기해서 항상 서로 달라지게 한다.
     const FEATURES = {{ features.keys() | list | tojson }};
@@ -496,11 +432,13 @@
     <div class="error">{{ error }}</div>
   {% endif %}
 
+  {% include "_fetch_note.html" %}
+
   {% if cells %}
     <div class="card">
       <h2>
         {{ code }} — 시작 {{ "{:,}".format(init_shares|int) }}주 / 시작 자산 {{ "{:,.0f}".format(initial_asset) }}
-        ({{ days }}일 데이터, {{ created_display }} 조회분) — X축: {{ x_label }} / Y축: {{ y_label }}
+        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분) — X축: {{ x_label }} / Y축: {{ y_label }}
       </h2>
       <div class="callout-grid">
         <a class="callout best" href="{{ best_link }}">
