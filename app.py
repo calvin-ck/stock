@@ -2668,6 +2668,10 @@ def best():
     페이지의 기본 스윕범위·고정값 그대로 한 번씩 계산해서, 그 안에서 나온 **최고 수익률
     조합**만 한 화면에 모아 비교하는 요약 페이지. 통합 히트맵(/heatmap3)은 그리드매매·
     이익회수의 일반화 버전이라 중복이므로 뺀다. 저장된 로컬 CSV만 사용.
+
+    sweep_max_pct: gap·수량·매수 트리거처럼 기본 상한이 50%였던 축들에 공통으로 적용되는
+    스윕 상한(%) — 하나의 값을 6개 히트맵의 해당 축에 그대로 전달한다. 이미 100%가 자연스러운
+    축(이익회수 gap, 자본회수 매수 회복률)은 그대로 둔다(스윕 대상 아니거나 이미 100%).
     """
     files = _list_local_csvs()
     groups = _grouped_local_csvs(files)
@@ -2676,6 +2680,7 @@ def best():
     selected_file = request.args.get("file", "").strip()
     period = request.args.get("period", "").strip()
     init_shares = request.args.get("init_shares", "100").strip()
+    sweep_max_pct = request.args.get("sweep_max_pct", "100").strip()
 
     context = {
         "active": "best",
@@ -2685,6 +2690,7 @@ def best():
         "default_file": default_file,
         "period": period,
         "init_shares": init_shares,
+        "sweep_max_pct": sweep_max_pct,
         "error": None,
         "code": None,
         "created": None,
@@ -2721,6 +2727,9 @@ def best():
             init_i = int(init_shares)
             if init_i < 0:
                 raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+            sweep_max_i = int(sweep_max_pct)
+            if sweep_max_i < 1:
+                raise ValueError("스윕 상한(%)은 1 이상이어야 합니다.")
 
             df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
             if df.empty:
@@ -2741,8 +2750,10 @@ def best():
 
             rows = []
 
-            # 1) 그리드 매매 — /heatmap과 동일한 기본값 (gap/수량 1~50%)
-            r1 = compute_profit_heatmap(df, range(1, 51), range(1, 51), initial_shares=init_i)
+            sweep_values = range(1, sweep_max_i + 1)
+
+            # 1) 그리드 매매 — /heatmap과 동일한 기본값 (gap/수량 1~sweep_max_pct%)
+            r1 = compute_profit_heatmap(df, sweep_values, sweep_values, initial_shares=init_i)
             b1 = r1["best"]
             rows.append({
                 "key": "grid", "icon": "🔲", "label": "그리드 매매",
@@ -2752,12 +2763,12 @@ def best():
                 "strategy_link": _build_backtest_link(
                     selected_file, b1["gap"], b1["qty_pct"], init_i, False, False, False, period=period_i,
                 ),
-                "heatmap_link": f"/heatmap?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+                "heatmap_link": f"/heatmap?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'gap_max': sweep_max_i, 'qty_pct_max': sweep_max_i})}",
             })
 
-            # 2) 이익 회수 — /heatmap2와 동일한 기본값 (수량 10% 고정, 회수율 100%, gap/이익gap 각각 1~50%/1~100%)
+            # 2) 이익 회수 — /heatmap2와 동일한 기본값 (수량 10% 고정, 회수율 100%, gap 1~sweep_max_pct% / 이익gap 1~100%)
             r2 = compute_profit_heatmap2(
-                df, range(1, 51), range(1, 101), trade_qty_percent=10, profit_recover_percent=100,
+                df, sweep_values, range(1, 101), trade_qty_percent=10, profit_recover_percent=100,
                 initial_shares=init_i,
             )
             b2 = r2["best"]
@@ -2770,11 +2781,11 @@ def best():
                     selected_file, b2["gap"], 10, init_i, False, False, False,
                     profit_gap=b2["profit_gap"], profit_recover=100, period=period_i,
                 ),
-                "heatmap_link": f"/heatmap2?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+                "heatmap_link": f"/heatmap2?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'gap_max': sweep_max_i})}",
             })
 
-            # 3) 일별 매매 — /heatmap4와 동일한 기본값 (매도/매수 수량 각각 1~50%)
-            r3 = compute_daily_heatmap(df, range(1, 51), range(1, 51), initial_shares=init_i)
+            # 3) 일별 매매 — /heatmap4와 동일한 기본값 (매도/매수 수량 각각 1~sweep_max_pct%)
+            r3 = compute_daily_heatmap(df, sweep_values, sweep_values, initial_shares=init_i)
             b3 = r3["best"]
             rows.append({
                 "key": "daily", "icon": "📅1️⃣", "label": "일별 매매",
@@ -2784,11 +2795,11 @@ def best():
                 "strategy_link": _build_daily_link(
                     selected_file, b3["sell_pct"], b3["buy_pct"], init_i, False, False, period=period_i,
                 ),
-                "heatmap_link": f"/heatmap4?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+                "heatmap_link": f"/heatmap4?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'sell_qty_pct_max': sweep_max_i, 'buy_qty_pct_max': sweep_max_i})}",
             })
 
-            # 4) 일별 매매2 — /heatmap5와 동일한 기본값 (gap/수량 1~50%)
-            r4 = compute_daily_gap_heatmap(df, range(1, 51), range(1, 51), initial_shares=init_i)
+            # 4) 일별 매매2 — /heatmap5와 동일한 기본값 (gap/수량 1~sweep_max_pct%)
+            r4 = compute_daily_gap_heatmap(df, sweep_values, sweep_values, initial_shares=init_i)
             b4 = r4["best"]
             rows.append({
                 "key": "daily2", "icon": "📅2️⃣", "label": "일별 매매2",
@@ -2796,12 +2807,12 @@ def best():
                 "condition": f"gap {b4['gap']}% / 수량 {b4['qty_pct']}% ({b4['qty']}주)",
                 "counts": f"매도 {b4['매도횟수']}회 / 매수 {b4['매수횟수']}회",
                 "strategy_link": _build_daily2_link(selected_file, b4["gap"], b4["qty_pct"], init_i, period=period_i),
-                "heatmap_link": f"/heatmap5?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+                "heatmap_link": f"/heatmap5?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'gap_pct_max': sweep_max_i, 'qty_pct_max': sweep_max_i})}",
             })
 
-            # 5) 일별 매매3 — /heatmap6과 동일한 기본값 (x=상승gap 1~50%, y=수량 1~50%, 하락gap은 상승gap과 동일)
+            # 5) 일별 매매3 — /heatmap6과 동일한 기본값 (x=상승gap 1~sweep_max_pct%, y=수량 1~sweep_max_pct%, 하락gap은 상승gap과 동일)
             r5 = compute_daily_reference_heatmap_2d(
-                df, "up_gap", range(1, 51), "qty_pct", range(1, 51), fixed={"down_gap": None},
+                df, "up_gap", sweep_values, "qty_pct", sweep_values, fixed={"down_gap": None},
                 initial_shares=init_i,
             )
             b5 = r5["best"]
@@ -2813,11 +2824,11 @@ def best():
                 "strategy_link": _build_daily3_link(
                     selected_file, b5["up_gap"], b5["down_gap"], b5["qty_pct"], init_i, period=period_i,
                 ),
-                "heatmap_link": f"/heatmap6?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+                "heatmap_link": f"/heatmap6?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'up_gap_max': sweep_max_i, 'qty_pct_max': sweep_max_i})}",
             })
 
-            # 6) 자본 회수 — /heatmap7과 동일한 기본값 (트리거 1~50%, 회복률 1~100%, 기준가=첫날 종가)
-            r6 = compute_capital_recovery_heatmap(df, range(1, 51), range(1, 101), initial_shares=init_i)
+            # 6) 자본 회수 — /heatmap7과 동일한 기본값 (트리거 1~sweep_max_pct%, 회복률 1~100%, 기준가=첫날 종가)
+            r6 = compute_capital_recovery_heatmap(df, sweep_values, range(1, 101), initial_shares=init_i)
             b6 = r6["best"]
             rows.append({
                 "key": "recovery", "icon": "💰", "label": "자본 회수",
@@ -2827,7 +2838,7 @@ def best():
                 "strategy_link": _build_recovery_link(
                     selected_file, b6["buy_trigger_pct"], b6["buy_recover_pct"], init_i, period=period_i,
                 ),
-                "heatmap_link": f"/heatmap7?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+                "heatmap_link": f"/heatmap7?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'trigger_max': sweep_max_i})}",
             })
 
             rows.sort(key=lambda r: r["profit_pct"], reverse=True)

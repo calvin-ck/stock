@@ -177,7 +177,9 @@
     각 히트맵 페이지의 <b>기본 스윕 범위와 고정값 그대로</b> 한 번씩 계산해서, 그 안에서 나온
     <b>최고 수익률 조합</b>만 모아 한눈에 비교합니다(통합 히트맵 /heatmap3은 그리드 매매·
     이익 회수의 일반화 버전이라 중복이므로 뺐습니다). 각 행을 클릭하면 그 조건 그대로 해당
-    전략 페이지로, 오른쪽 링크로는 그 히트맵 페이지로 이동할 수 있습니다.
+    전략 페이지로, 오른쪽 링크로는 그 히트맵 페이지로 이동할 수 있습니다. <b>스윕 상한(%)</b>
+    은 gap·수량·매수 트리거처럼 기본 상한이 50%였던 축들에 공통으로 적용됩니다(이미 100%가
+    자연스러운 이익회수 gap·매수 회복률 축은 그대로 둡니다).
   </p>
 
   {% if files %}
@@ -187,6 +189,10 @@
       <div class="field">
         <label for="init_shares">시작 보유 주식수</label>
         <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
+      </div>
+      <div class="field">
+        <label for="sweep_max_pct">스윕 상한 (%) <span class="hint">gap/수량/트리거 축 공통</span></label>
+        <input type="number" name="sweep_max_pct" id="sweep_max_pct" min="1" value="{{ sweep_max_pct }}" required>
       </div>
       <button type="submit">비교하기</button>
     </div>
