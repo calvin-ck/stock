@@ -197,6 +197,16 @@
     </div>
 
     <div class="card">
+      <h2>{{ code }} — 갭 분석</h2>
+      <p class="sub" style="margin-bottom: 12px; font-size: 12px;">
+        <b>당일 갭</b>(주황) = 그날 종가 − 그날 시가 — 장중에 오르내린 폭. <b>전일 갭</b>
+        (보라) = 그날 시가 − 전날 종가 — 장 시작 전(밤새) 뛰거나 빠진 폭. 두 값을 더하면
+        전날 종가 대비 그날 종가의 전체 변화폭과 같습니다.
+      </p>
+      <canvas id="gapChart"></canvas>
+    </div>
+
+    <div class="card">
       <h2>
         {{ code }} — {{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분
         ({{ result.총일수 }}거래일 기준)
@@ -331,6 +341,40 @@
         options: {
           responsive: true,
           plugins: { legend: { display: false } },
+          scales: {
+            y: { ticks: { callback: (v) => v.toLocaleString() } },
+          },
+        },
+      });
+
+      new Chart(document.getElementById('gapChart'), {
+        type: 'line',
+        data: {
+          labels: {{ chart_labels | tojson }},
+          datasets: [
+            {
+              label: '당일 갭 (종가-시가)',
+              data: {{ chart_intraday_gap | tojson }},
+              borderColor: '#f59e0b',
+              backgroundColor: 'rgba(245,158,11,0.08)',
+              tension: 0.2,
+              pointRadius: 1,
+              spanGaps: true,
+            },
+            {
+              label: '전일 갭 (시가-전일종가)',
+              data: {{ chart_overnight_gap | tojson }},
+              borderColor: '#7c3aed',
+              backgroundColor: 'rgba(124,58,237,0.08)',
+              tension: 0.2,
+              pointRadius: 1,
+              spanGaps: true,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: true, position: 'bottom' } },
           scales: {
             y: { ticks: { callback: (v) => v.toLocaleString() } },
           },

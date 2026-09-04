@@ -20,6 +20,7 @@ from core import (
     daily_reversal_strategy, compute_daily_heatmap,
     daily_gap_strategy, compute_daily_gap_heatmap,
     daily_reference_strategy, compute_daily_reference_heatmap_2d,
+    capital_recovery_strategy, compute_capital_recovery_heatmap,
     compute_profit_heatmap, compute_profit_heatmap2, compute_profit_heatmap_2d,
     compute_price_stats,
     HEATMAP_FEATURES, DAILY3_HEATMAP_FEATURES, SISE_DAY_URL,
@@ -327,6 +328,26 @@ def _build_daily3_link(
     if no_buy:
         params["no_buy"] = "on"
     return f"/daily3?{urlencode(params)}"
+
+
+def _build_recovery_link(
+    selected_file, buy_trigger_pct, buy_recover_pct, init_shares,
+    base_price=None, allow_negative_cash=False, period=None,
+):
+    """히트맵7 셀·요약 클릭 시 그 조건 그대로 /recovery 페이지로 이동하는 링크를 만든다."""
+    params = {
+        "file": selected_file,
+        "buy_trigger_pct": buy_trigger_pct,
+        "buy_recover_pct": buy_recover_pct,
+        "init_shares": init_shares,
+    }
+    if base_price is not None:
+        params["base_price"] = base_price
+    if period is not None:
+        params["period"] = period
+    if allow_negative_cash:
+        params["allow_negative_cash"] = "on"
+    return f"/recovery?{urlencode(params)}"
 
 
 @app.route("/", methods=["GET"])
@@ -1146,6 +1167,178 @@ def daily3():
             context["error"] = f"백테스트 계산 중 오류가 발생했습니다: {e}"
 
     return render_template("daily3.html", **context)
+
+
+@app.route("/recovery", methods=["GET"])
+def recovery():
+    """
+    "자본 회수" 백테스트 페이지. 기준가(비우면 첫날 종가, 입력하면 그 값)로 자본금
+    (기준가 × 시작 보유 주식수)을 정하고, 주식 평가금액이 자본금을 넘어서면(주가가 기준가
+    보다 오르면) 넘어선 만큼만 정수 주식 단위로 팔아 현금으로 회수한다. 반대로 주식
+    평가금액이 자본금 대비 매수 트리거 gap(%) 이상 내려가면 부족분 중 매수 회복률(%)만큼만
+    사서 채운다(자본금을 넘어서 사지는 않음). 기준가는 매매가 일어나도 갱신되지 않고 처음
+    값 그대로 고정된다.
+    """
+    files = _list_local_csvs()
+    groups = _grouped_local_csvs(files)
+    default_file = _most_recent_file(files)
+
+    selected_file = request.args.get("file", "").strip()
+    period = request.args.get("period", "").strip()
+    init_shares = request.args.get("init_shares", "100").strip()
+    base_price = request.args.get("base_price", "").strip()  # 비우면 첫날 종가
+    buy_trigger_pct = request.args.get("buy_trigger_pct", "10").strip()
+    buy_recover_pct = request.args.get("buy_recover_pct", "100").strip()
+    allow_negative_cash = request.args.get("allow_negative_cash") == "on"
+
+    context = {
+        "active": "recovery",
+        "files": files,
+        "groups": groups,
+        "selected_file": selected_file,
+        "default_file": default_file,
+        "period": period,
+        "init_shares": init_shares,
+        "base_price": base_price,
+        "buy_trigger_pct": buy_trigger_pct,
+        "buy_recover_pct": buy_recover_pct,
+        "allow_negative_cash": allow_negative_cash,
+        "error": None,
+        "summary": None,
+        "trade_log": None,
+        "resolved_base_price": None,
+        "capital": None,
+        "initial_asset": None,
+        "hold_only_asset": None,
+        "vs_hold": None,
+        "profit": None,
+        "profit_pct": None,
+        "code": None,
+        "created": None,
+        "created_display": None,
+        "max_days": None,
+        "applied_period": None,
+        "fetch_note": None,
+        "chart_labels": None,
+        "chart_prices": None,
+        "chart_sell_points": None,
+        "chart_buy_points": None,
+        "chart_total": None,
+        "chart_stock_value": None,
+        "chart_cash": None,
+        "chart_hold_only": None,
+        "chart_capital": None,
+    }
+
+    if selected_file:
+        m = _CSV_NAME_RE.match(selected_file)
+        if not m:
+            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
+            return render_template("recovery.html", **context)
+
+        code, created = m.group(1), m.group(2)
+        period_i_req = int(period) if period.isdigit() else None
+        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
+        if path is None:
+            context["error"] = fetch_note
+            return render_template("recovery.html", **context)
+
+        context["code"] = code
+        context["created"] = created
+        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
+        context["selected_file"] = os.path.basename(path)
+        context["max_days"] = _csv_span_days(path, created)
+        context["fetch_note"] = fetch_note
+
+        try:
+            init_i = int(init_shares)
+            base_price_f = float(base_price) if base_price else None
+            buy_trigger_f = float(buy_trigger_pct)
+            buy_recover_f = float(buy_recover_pct)
+            if init_i < 0:
+                raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+            if base_price_f is not None and base_price_f <= 0:
+                raise ValueError("기준가는 0보다 커야 합니다.")
+            if buy_trigger_f <= 0:
+                raise ValueError("매수 트리거 gap은 0보다 커야 합니다.")
+            if buy_recover_f <= 0:
+                raise ValueError("매수 회복률은 0보다 커야 합니다.")
+
+            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            if df.empty:
+                raise ValueError("CSV에 데이터가 없습니다.")
+
+            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
+            if context["max_days"]:
+                period_i = min(period_i, context["max_days"])
+            df = _slice_by_period(df, created, period_i)
+            if df.empty:
+                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
+            context["applied_period"] = period_i
+
+            result = capital_recovery_strategy(
+                df, initial_shares=init_i, base_price=base_price_f,
+                buy_trigger_percent=buy_trigger_f, buy_recover_percent=buy_recover_f,
+                allow_negative_cash=allow_negative_cash,
+            )
+
+            trade_log = result.pop("매매일지")
+            for row in trade_log:
+                row["날짜"] = pd.Timestamp(row["날짜"]).strftime("%Y-%m-%d")
+
+            asset_log = result.pop("자산추이")
+
+            sorted_df = df.sort_values("날짜")
+            chart_labels = sorted_df["날짜"].dt.strftime("%Y-%m-%d").tolist()
+            chart_prices = sorted_df["종가"].tolist()
+            chart_sell_points = [
+                {"x": row["날짜"], "y": row["가격"]} for row in trade_log if row["구분"] == "매도"
+            ]
+            chart_buy_points = [
+                {"x": row["날짜"], "y": row["가격"]} for row in trade_log if row["구분"] == "매수"
+            ]
+            chart_total = [row["total"] for row in asset_log]
+            chart_stock_value = [row["주식평가금액"] for row in asset_log]
+            chart_cash = [row["현금"] for row in asset_log]
+            chart_hold_only = [row["주가"] * init_i for row in asset_log]
+
+            resolved_base = result["기준가"]
+            capital = result["자본금"]
+            chart_capital = [capital] * len(asset_log)
+
+            first_price = float(df.sort_values("날짜")["종가"].iloc[0])
+            initial_asset = init_i * first_price
+            hold_only_asset = init_i * result["주가"]
+
+            profit = result["total"] - initial_asset
+            profit_pct = (profit / initial_asset * 100) if initial_asset else 0.0
+            vs_hold = result["total"] - hold_only_asset
+
+            context["summary"] = result
+            context["resolved_base_price"] = resolved_base
+            context["capital"] = capital
+            context["initial_asset"] = initial_asset
+            context["hold_only_asset"] = hold_only_asset
+            context["vs_hold"] = vs_hold
+            context["profit"] = profit
+            context["profit_pct"] = profit_pct
+            context["trade_log"] = trade_log
+            context["chart_labels"] = chart_labels
+            context["chart_prices"] = chart_prices
+            context["chart_sell_points"] = chart_sell_points
+            context["chart_buy_points"] = chart_buy_points
+            context["chart_total"] = chart_total
+            context["chart_stock_value"] = chart_stock_value
+            context["chart_cash"] = chart_cash
+            context["chart_hold_only"] = chart_hold_only
+            context["chart_capital"] = chart_capital
+
+        except ValueError as e:
+            context["error"] = f"입력 오류: {e}"
+        except Exception as e:
+            context["error"] = f"백테스트 계산 중 오류가 발생했습니다: {e}"
+
+    return render_template("recovery.html", **context)
 
 
 @app.route("/heatmap", methods=["GET"])
@@ -2299,6 +2492,361 @@ def heatmap6():
     return render_template("heatmap6.html", **context)
 
 
+@app.route("/heatmap7", methods=["GET"])
+def heatmap7():
+    """
+    capital_recovery_strategy() 전용 히트맵: 매수 트리거 gap(%) x 매수 회복률(%) 조합별
+    수익률을 계산해 히트맵으로 보여준다. 기준가/시작 보유 주식수/현금 부족해도 매수 여부는
+    폼에서 고정값으로 입력한다. 저장된 로컬 CSV만 사용 (네이버 재접속 없음).
+    """
+    files = _list_local_csvs()
+    groups = _grouped_local_csvs(files)
+    default_file = _most_recent_file(files)
+
+    selected_file = request.args.get("file", "").strip()
+    period = request.args.get("period", "").strip()
+    init_shares = request.args.get("init_shares", "100").strip()
+    base_price = request.args.get("base_price", "").strip()  # 비우면 첫날 종가
+    allow_negative_cash = request.args.get("allow_negative_cash") == "on"
+    trigger_min = request.args.get("trigger_min", "1").strip()
+    trigger_max = request.args.get("trigger_max", "50").strip()
+    recover_min = request.args.get("recover_min", "1").strip()
+    recover_max = request.args.get("recover_max", "100").strip()
+
+    context = {
+        "active": "heatmap7",
+        "files": files,
+        "groups": groups,
+        "selected_file": selected_file,
+        "default_file": default_file,
+        "period": period,
+        "init_shares": init_shares,
+        "base_price": base_price,
+        "allow_negative_cash": allow_negative_cash,
+        "trigger_min": trigger_min,
+        "trigger_max": trigger_max,
+        "recover_min": recover_min,
+        "recover_max": recover_max,
+        "error": None,
+        "code": None,
+        "created": None,
+        "created_display": None,
+        "max_days": None,
+        "applied_period": None,
+        "fetch_note": None,
+        "triggers": None,
+        "recovers": None,
+        "cells": None,
+        "best": None,
+        "worst": None,
+        "best_link": None,
+        "worst_link": None,
+        "top10": None,
+        "bottom10": None,
+        "ranked": None,
+        "ranked_raw": None,
+        "initial_asset": None,
+        "hold_only_asset": None,
+        "resolved_base_price": None,
+        "capital": None,
+    }
+
+    if selected_file:
+        m = _CSV_NAME_RE.match(selected_file)
+        if not m:
+            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
+            return render_template("heatmap7.html", **context)
+
+        code, created = m.group(1), m.group(2)
+        period_i_req = int(period) if period.isdigit() else None
+        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
+        if path is None:
+            context["error"] = fetch_note
+            return render_template("heatmap7.html", **context)
+
+        context["code"] = code
+        context["created"] = created
+        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
+        context["selected_file"] = selected_file = os.path.basename(path)
+        context["max_days"] = _csv_span_days(path, created)
+        context["fetch_note"] = fetch_note
+
+        try:
+            init_i = int(init_shares)
+            base_price_f = float(base_price) if base_price else None
+            if init_i < 0:
+                raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+            if base_price_f is not None and base_price_f <= 0:
+                raise ValueError("기준가는 0보다 커야 합니다.")
+
+            trigger_min_i = int(trigger_min)
+            trigger_max_i = int(trigger_max)
+            recover_min_i = int(recover_min)
+            recover_max_i = int(recover_max)
+            if trigger_min_i < 1 or recover_min_i < 1:
+                raise ValueError("트리거/회복률 하한은 1 이상이어야 합니다.")
+            if trigger_max_i < trigger_min_i:
+                raise ValueError("트리거 상한은 하한보다 크거나 같아야 합니다.")
+            if recover_max_i < recover_min_i:
+                raise ValueError("회복률 상한은 하한보다 크거나 같아야 합니다.")
+
+            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            if df.empty:
+                raise ValueError("CSV에 데이터가 없습니다.")
+
+            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
+            if context["max_days"]:
+                period_i = min(period_i, context["max_days"])
+            df = _slice_by_period(df, created, period_i)
+            if df.empty:
+                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
+            context["applied_period"] = period_i
+
+            trigger_values = range(trigger_min_i, trigger_max_i + 1)  # 1% 단위
+            recover_values = range(recover_min_i, recover_max_i + 1)  # 1% 단위
+
+            result = compute_capital_recovery_heatmap(
+                df, trigger_values, recover_values, initial_shares=init_i,
+                base_price=base_price_f, allow_negative_cash=allow_negative_cash,
+            )
+
+            vmax = max(abs(result["best"]["profit_pct"]), abs(result["worst"]["profit_pct"]), 1e-9)
+
+            def _link_for_combo(combo):
+                return _build_recovery_link(
+                    selected_file, combo["buy_trigger_pct"], combo["buy_recover_pct"], init_i,
+                    base_price=base_price_f, allow_negative_cash=allow_negative_cash, period=period_i,
+                )
+
+            cells = []
+            for ti, t in enumerate(result["triggers"]):
+                for ri, r in enumerate(result["recovers"]):
+                    pct = result["grid"][ti][ri]
+                    is_best = (t == result["best"]["buy_trigger_pct"] and r == result["best"]["buy_recover_pct"])
+                    is_worst = (t == result["worst"]["buy_trigger_pct"] and r == result["worst"]["buy_recover_pct"])
+                    cells.append({
+                        "buy_trigger_pct": t, "buy_recover_pct": r, "pct": pct,
+                        "total": result["initial_asset"] * (1 + pct / 100),
+                        "color": _profit_color(pct, vmax),
+                        "link": _link_for_combo({"buy_trigger_pct": t, "buy_recover_pct": r}),
+                        "is_best": is_best,
+                        "is_worst": is_worst,
+                    })
+
+            context["triggers"] = result["triggers"]
+            context["recovers"] = result["recovers"]
+            context["cells"] = cells
+            context["best"] = result["best"]
+            context["worst"] = result["worst"]
+            context["initial_asset"] = result["initial_asset"]
+            context["hold_only_asset"] = result["hold_only_asset"]
+            context["resolved_base_price"] = result["기준가"]
+            context["capital"] = result["자본금"]
+            context["best_link"] = _link_for_combo(result["best"])
+            context["worst_link"] = _link_for_combo(result["worst"])
+
+            def _with_link(combo):
+                return {**combo, "link": _link_for_combo(combo)}
+
+            context["top10"] = [_with_link(c) for c in result["top10"]]
+            context["bottom10"] = [_with_link(c) for c in result["bottom10"]]
+            context["ranked"] = [_with_link(c) for c in result["ranked"]]
+            context["ranked_raw"] = result["raw_ranked"]  # 순위별 수익률 그래프의 "중복 제거 off" 데이터 (링크 불필요)
+
+        except ValueError as e:
+            context["error"] = f"입력 오류: {e}"
+        except Exception as e:
+            context["error"] = f"히트맵 계산 중 오류가 발생했습니다: {e}"
+
+    return render_template("heatmap7.html", **context)
+
+
+@app.route("/best", methods=["GET"])
+def best():
+    """
+    각 전략별 히트맵(그리드매매/이익회수/일별매매/일별매매2/일별매매3/자본회수)을 각
+    페이지의 기본 스윕범위·고정값 그대로 한 번씩 계산해서, 그 안에서 나온 **최고 수익률
+    조합**만 한 화면에 모아 비교하는 요약 페이지. 통합 히트맵(/heatmap3)은 그리드매매·
+    이익회수의 일반화 버전이라 중복이므로 뺀다. 저장된 로컬 CSV만 사용.
+    """
+    files = _list_local_csvs()
+    groups = _grouped_local_csvs(files)
+    default_file = _most_recent_file(files)
+
+    selected_file = request.args.get("file", "").strip()
+    period = request.args.get("period", "").strip()
+    init_shares = request.args.get("init_shares", "100").strip()
+
+    context = {
+        "active": "best",
+        "files": files,
+        "groups": groups,
+        "selected_file": selected_file,
+        "default_file": default_file,
+        "period": period,
+        "init_shares": init_shares,
+        "error": None,
+        "code": None,
+        "created": None,
+        "created_display": None,
+        "max_days": None,
+        "applied_period": None,
+        "fetch_note": None,
+        "rows": None,
+        "initial_asset": None,
+        "hold_only_asset": None,
+    }
+
+    if selected_file:
+        m = _CSV_NAME_RE.match(selected_file)
+        if not m:
+            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
+            return render_template("best.html", **context)
+
+        code, created = m.group(1), m.group(2)
+        period_i_req = int(period) if period.isdigit() else None
+        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
+        if path is None:
+            context["error"] = fetch_note
+            return render_template("best.html", **context)
+
+        context["code"] = code
+        context["created"] = created
+        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
+        context["selected_file"] = selected_file = os.path.basename(path)
+        context["max_days"] = _csv_span_days(path, created)
+        context["fetch_note"] = fetch_note
+
+        try:
+            init_i = int(init_shares)
+            if init_i < 0:
+                raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+
+            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            if df.empty:
+                raise ValueError("CSV에 데이터가 없습니다.")
+
+            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
+            if context["max_days"]:
+                period_i = min(period_i, context["max_days"])
+            df = _slice_by_period(df, created, period_i)
+            if df.empty:
+                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
+            context["applied_period"] = period_i
+
+            first_price = float(df.sort_values("날짜")["종가"].iloc[0])
+            last_price = float(df.sort_values("날짜")["종가"].iloc[-1])
+            initial_asset = init_i * first_price
+            hold_only_asset = init_i * last_price
+
+            rows = []
+
+            # 1) 그리드 매매 — /heatmap과 동일한 기본값 (gap/수량 1~50%)
+            r1 = compute_profit_heatmap(df, range(1, 51), range(1, 51), initial_shares=init_i)
+            b1 = r1["best"]
+            rows.append({
+                "key": "grid", "icon": "🔲", "label": "그리드 매매",
+                "profit_pct": b1["profit_pct"], "total": b1["total"],
+                "condition": f"gap {b1['gap']}% / 수량 {b1['qty_pct']}% ({b1['qty']}주)",
+                "counts": f"매도 {b1['매도횟수']}회 / 매수 {b1['매수횟수']}회",
+                "strategy_link": _build_backtest_link(
+                    selected_file, b1["gap"], b1["qty_pct"], init_i, False, False, False, period=period_i,
+                ),
+                "heatmap_link": f"/heatmap?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+            })
+
+            # 2) 이익 회수 — /heatmap2와 동일한 기본값 (수량 10% 고정, 회수율 100%, gap/이익gap 각각 1~50%/1~100%)
+            r2 = compute_profit_heatmap2(
+                df, range(1, 51), range(1, 101), trade_qty_percent=10, profit_recover_percent=100,
+                initial_shares=init_i,
+            )
+            b2 = r2["best"]
+            rows.append({
+                "key": "recover_gap", "icon": "🏦", "label": "그리드 매매 + 이익 회수",
+                "profit_pct": b2["profit_pct"], "total": b2["total"],
+                "condition": f"gap {b2['gap']}% / 이익gap {b2['profit_gap']}% (수량 10% 고정, 회수율 100% 고정)",
+                "counts": f"매도 {b2['매도횟수']}회 / 매수 {b2['매수횟수']}회 / 이익회수 {b2['이익회수횟수']}회",
+                "strategy_link": _build_backtest_link(
+                    selected_file, b2["gap"], 10, init_i, False, False, False,
+                    profit_gap=b2["profit_gap"], profit_recover=100, period=period_i,
+                ),
+                "heatmap_link": f"/heatmap2?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+            })
+
+            # 3) 일별 매매 — /heatmap4와 동일한 기본값 (매도/매수 수량 각각 1~50%)
+            r3 = compute_daily_heatmap(df, range(1, 51), range(1, 51), initial_shares=init_i)
+            b3 = r3["best"]
+            rows.append({
+                "key": "daily", "icon": "📅1️⃣", "label": "일별 매매",
+                "profit_pct": b3["profit_pct"], "total": b3["total"],
+                "condition": f"매도 {b3['sell_pct']}% ({b3['sell_qty']}주) / 매수 {b3['buy_pct']}% ({b3['buy_qty']}주)",
+                "counts": f"매도 {b3['매도횟수']}회 / 매수 {b3['매수횟수']}회",
+                "strategy_link": _build_daily_link(
+                    selected_file, b3["sell_pct"], b3["buy_pct"], init_i, False, False, period=period_i,
+                ),
+                "heatmap_link": f"/heatmap4?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+            })
+
+            # 4) 일별 매매2 — /heatmap5와 동일한 기본값 (gap/수량 1~50%)
+            r4 = compute_daily_gap_heatmap(df, range(1, 51), range(1, 51), initial_shares=init_i)
+            b4 = r4["best"]
+            rows.append({
+                "key": "daily2", "icon": "📅2️⃣", "label": "일별 매매2",
+                "profit_pct": b4["profit_pct"], "total": b4["total"],
+                "condition": f"gap {b4['gap']}% / 수량 {b4['qty_pct']}% ({b4['qty']}주)",
+                "counts": f"매도 {b4['매도횟수']}회 / 매수 {b4['매수횟수']}회",
+                "strategy_link": _build_daily2_link(selected_file, b4["gap"], b4["qty_pct"], init_i, period=period_i),
+                "heatmap_link": f"/heatmap5?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+            })
+
+            # 5) 일별 매매3 — /heatmap6과 동일한 기본값 (x=상승gap 1~50%, y=수량 1~50%, 하락gap은 상승gap과 동일)
+            r5 = compute_daily_reference_heatmap_2d(
+                df, "up_gap", range(1, 51), "qty_pct", range(1, 51), fixed={"down_gap": None},
+                initial_shares=init_i,
+            )
+            b5 = r5["best"]
+            rows.append({
+                "key": "daily3", "icon": "📅3️⃣", "label": "일별 매매3",
+                "profit_pct": b5["profit_pct"], "total": b5["total"],
+                "condition": f"상승gap {b5['up_gap']}% / 하락gap {b5['down_gap']}% / 수량 {b5['qty_pct']}% ({b5['qty']}주)",
+                "counts": f"매도 {b5['매도횟수']}회 / 매수 {b5['매수횟수']}회",
+                "strategy_link": _build_daily3_link(
+                    selected_file, b5["up_gap"], b5["down_gap"], b5["qty_pct"], init_i, period=period_i,
+                ),
+                "heatmap_link": f"/heatmap6?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+            })
+
+            # 6) 자본 회수 — /heatmap7과 동일한 기본값 (트리거 1~50%, 회복률 1~100%, 기준가=첫날 종가)
+            r6 = compute_capital_recovery_heatmap(df, range(1, 51), range(1, 101), initial_shares=init_i)
+            b6 = r6["best"]
+            rows.append({
+                "key": "recovery", "icon": "💰", "label": "자본 회수",
+                "profit_pct": b6["profit_pct"], "total": b6["total"],
+                "condition": f"매수 트리거 {b6['buy_trigger_pct']}% / 매수 회복률 {b6['buy_recover_pct']}%",
+                "counts": f"매도 {b6['매도횟수']}회 / 매수 {b6['매수횟수']}회",
+                "strategy_link": _build_recovery_link(
+                    selected_file, b6["buy_trigger_pct"], b6["buy_recover_pct"], init_i, period=period_i,
+                ),
+                "heatmap_link": f"/heatmap7?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i})}",
+            })
+
+            rows.sort(key=lambda r: r["profit_pct"], reverse=True)
+            for i, row in enumerate(rows):
+                row["rank"] = i + 1
+                row["vs_hold"] = row["total"] - hold_only_asset
+
+            context["rows"] = rows
+            context["initial_asset"] = initial_asset
+            context["hold_only_asset"] = hold_only_asset
+
+        except ValueError as e:
+            context["error"] = f"입력 오류: {e}"
+        except Exception as e:
+            context["error"] = f"계산 중 오류가 발생했습니다: {e}"
+
+    return render_template("best.html", **context)
+
+
 @app.route("/stats", methods=["GET"])
 def stats():
     """
@@ -2368,6 +2916,15 @@ def stats():
             chart_df = df.sort_values("날짜")
             context["chart_labels"] = chart_df["날짜"].dt.strftime("%Y-%m-%d").tolist()
             context["chart_prices"] = chart_df["종가"].tolist()
+
+            # 당일 갭 = 그날 종가 - 그날 시가, 전일 갭 = 그날 시가 - 전날 종가.
+            # 둘을 더하면 전날 종가 대비 그날 종가의 전체 변화폭과 같다.
+            intraday_gap = chart_df["종가"] - chart_df["시가"]
+            overnight_gap = chart_df["시가"] - chart_df["종가"].shift(1)
+            context["chart_intraday_gap"] = [float(v) for v in intraday_gap.tolist()]
+            context["chart_overnight_gap"] = [
+                None if pd.isna(v) else float(v) for v in overnight_gap.tolist()
+            ]
 
             context["result"] = compute_price_stats(df)
 

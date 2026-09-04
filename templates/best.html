@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>전략별 최고 수익 비교</title>
+<style>
+  :root {
+    --up: #d24343;
+    --down: #2a6fd6;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --border: #e3e5e8;
+    --text: #1f2328;
+    --muted: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 32px 16px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  .nav {
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .nav .nav-home { color: #2a6fd6; text-decoration: none; font-weight: 600; }
+  .nav .nav-home:hover { text-decoration: underline; }
+  .nav .nav-home.active { color: var(--text); text-decoration: underline; }
+  .nav a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
+  .nav .nav-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 14px 5px 12px;
+  }
+  .nav .nav-group-label {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding-right: 8px;
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .nav .nav-group a { color: #2a6fd6; text-decoration: none; white-space: nowrap; }
+  .nav .nav-group a:hover { text-decoration: underline; }
+  .nav .nav-group a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--card);
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field .hint { font-weight: 400; color: var(--muted); }
+  form select, form input {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  form select { min-width: 180px; }
+  form input[type="number"] { width: 110px; }
+  form button {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #1f2328;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    height: 41px;
+  }
+  form button:hover { background: #3b3f45; }
+
+  .empty {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .empty a { color: #2a6fd6; }
+
+  .error {
+    background: #fdecec;
+    color: var(--up);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 14px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 12px 0; }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .stat { background: var(--bg); border-radius: 10px; padding: 12px 14px; }
+  .stat .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .stat .value { font-size: 18px; font-weight: 700; }
+
+  .board { display: flex; flex-direction: column; gap: 10px; }
+  .row {
+    display: grid;
+    grid-template-columns: 40px 1fr auto;
+    gap: 14px;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .row.rank-1 { background: #fdecec; border-color: #f6c6c6; }
+  .rank-num { font-size: 18px; font-weight: 800; color: var(--muted); text-align: center; }
+  .row.rank-1 .rank-num { color: var(--up); }
+  .row-main { min-width: 0; }
+  .row-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .row-cond { font-size: 13px; color: var(--muted); margin-bottom: 2px; }
+  .row-counts { font-size: 12px; color: var(--muted); }
+  .row-links { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .row-links a {
+    font-size: 12px; color: #2a6fd6; text-decoration: none;
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px;
+    background: var(--card);
+    white-space: nowrap;
+  }
+  .row-links a:hover { text-decoration: underline; }
+  .row-figures { text-align: right; white-space: nowrap; }
+  .row-pct { font-size: 22px; font-weight: 800; }
+  .row-pct.up { color: var(--up); }
+  .row-pct.down { color: var(--down); }
+  .row-total { font-size: 13px; color: var(--text); margin-top: 2px; }
+  .row-vs { font-size: 12px; margin-top: 2px; }
+  .row-vs.up { color: var(--up); }
+  .row-vs.down { color: var(--down); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  {% include "_nav.html" %}
+  <h1>🏆 전략별 최고 수익 비교</h1>
+  <p class="sub">
+    그리드 매매·이익 회수·일별 매매·일별 매매2·일별 매매3·자본 회수, 6개 전략의 히트맵을
+    각 히트맵 페이지의 <b>기본 스윕 범위와 고정값 그대로</b> 한 번씩 계산해서, 그 안에서 나온
+    <b>최고 수익률 조합</b>만 모아 한눈에 비교합니다(통합 히트맵 /heatmap3은 그리드 매매·
+    이익 회수의 일반화 버전이라 중복이므로 뺐습니다). 각 행을 클릭하면 그 조건 그대로 해당
+    전략 페이지로, 오른쪽 링크로는 그 히트맵 페이지로 이동할 수 있습니다.
+  </p>
+
+  {% if files %}
+  <form method="get" action="/best" id="bestForm">
+    <div class="form-row">
+      {% include "_csv_file_selector.html" %}
+      <div class="field">
+        <label for="init_shares">시작 보유 주식수</label>
+        <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
+      </div>
+      <button type="submit">비교하기</button>
+    </div>
+  </form>
+  {% else %}
+  <div class="empty">
+    저장된 데이터가 없습니다. <a href="/">메인 페이지</a>에서 종목을 먼저 조회해주세요.<br>
+    (조회한 데이터는 자동으로 로컬 CSV에 저장되어 여기서 재사용됩니다.)
+  </div>
+  {% endif %}
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {% include "_fetch_note.html" %}
+
+  {% if rows %}
+    <div class="card">
+      <h2>
+        {{ code }} — 시작 {{ "{:,}".format(init_shares|int) }}주
+        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분)
+      </h2>
+      <div class="summary-grid">
+        <div class="stat">
+          <div class="label">시작 자산</div>
+          <div class="value">{{ "{:,.0f}".format(initial_asset) }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">매매 안 했을 때 최종 자산</div>
+          <div class="value">{{ "{:,.0f}".format(hold_only_asset) }}</div>
+        </div>
+      </div>
+
+      <div class="board">
+        {% for row in rows %}
+        <div class="row {{ 'rank-1' if row.rank == 1 }}">
+          <div class="rank-num">{{ row.rank }}</div>
+          <div class="row-main">
+            <div class="row-title"><span>{{ row.icon }}</span> {{ row.label }}</div>
+            <div class="row-cond">{{ row.condition }}</div>
+            <div class="row-counts">{{ row.counts }}</div>
+            <div class="row-links">
+              <a href="{{ row.strategy_link }}">이 조건으로 백테스트 보기</a>
+              <a href="{{ row.heatmap_link }}">히트맵 페이지로 이동</a>
+            </div>
+          </div>
+          <div class="row-figures">
+            <div class="row-pct {{ 'up' if row.profit_pct >= 0 else 'down' }}">{{ "{:+.2f}".format(row.profit_pct) }}%</div>
+            <div class="row-total">최종자산 {{ "{:,.0f}".format(row.total) }}</div>
+            <div class="row-vs {{ 'up' if row.vs_hold >= 0 else 'down' }}">보유 대비 {{ "{:+,.0f}".format(row.vs_hold) }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+</div>
+</body>
+</html>

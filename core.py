@@ -1345,6 +1345,349 @@ DAILY3_HEATMAP_FEATURES = {
 }
 
 
+def _simulate_capital_recovery(
+    prices: list,
+    dates,
+    initial_shares: int,
+    base_price: float,
+    buy_trigger_percent: float,
+    buy_recover_percent: float,
+    allow_negative_cash: bool = False,
+    record_log: bool = False,
+) -> dict:
+    """
+    "자본 회수" 전략의 실제 시뮬레이션 루프.
+
+    규칙
+    ----
+    - 기준가(base_price)는 처음 한 번 정해지면 끝까지 고정된다 (grid_trade_strategy()/
+      daily_reference_strategy()처럼 트레일링하거나 매매 시 갱신되지 않음). 자본금은
+      base_price * initial_shares로, "주식으로 계속 들고 있어야 할 목표 평가금액"이다.
+    - **매도**: 현재가가 기준가보다 높아 그날 주식 평가금액(보유주식수 * 현재가)이 자본금을
+      넘어서면, 그 초과분(주식평가금액 − 자본금)을 현재가로 나눠 **정수 주식 단위로 내림**
+      해서 판다 — 소수점만큼은 팔지 않으므로 매도 직후에도 평가금액이 자본금을 살짝 웃돌 수
+      있다(예: 100주 300원 시작, 320원이 되면 초과분 2,000원 ÷ 320원 = 6.25 → 6주만 매도).
+      현재가가 기준가 이하면 매도하지 않는다.
+    - **매수**: 주식 평가금액이 자본금 대비 buy_trigger_percent% 이상 내려가면(즉
+      주식평가금액 <= 자본금 * (1 − buy_trigger_percent/100)) 매수를 시도한다. 부족분
+      (자본금 − 주식평가금액) 중 buy_recover_percent%만큼만 채우도록 현재가로 나눠 정수
+      주식 단위로 내림해서 산다 — buy_recover_percent를 100%보다 크게 줘도 부족분(=자본금)
+      을 넘어서 사지는 않는다("매수는 자본금까지만"). allow_negative_cash=True면 현금과
+      무관하게 계산된 수량을 그대로 매수하고(현금이 마이너스가 될 수 있음), False(기본)면
+      쌓인 현금 범위 내에서만(현금으로 살 수 있는 만큼만) 매수한다.
+    - 매도 조건(주식평가금액 > 자본금)과 매수 조건(주식평가금액 <= 자본금 * (1−trigger))은
+      동시에 성립할 수 없으므로 하루에 매도·매수가 같이 일어나는 일은 없다.
+
+    record_log : True면 매매일지/자산추이를 기록해서 반환한다 (느림). False면 최종 결과만
+        계산한다.
+    """
+    shares = initial_shares
+    cash = 0.0
+    capital = base_price * initial_shares
+    sell_count = 0
+    buy_count = 0
+    trade_log = [] if record_log else None
+    asset_log = [] if record_log else None
+
+    if record_log:
+        asset_log.append({
+            "날짜": dates[0], "주가": prices[0], "현금": cash, "보유주식수": shares,
+            "주식평가금액": prices[0] * shares, "total": prices[0] * shares + cash,
+        })
+
+    for i in range(1, len(prices)):
+        price = prices[i]
+        date = dates[i] if dates is not None else None
+        stock_value = shares * price
+
+        if price > base_price and stock_value > capital:
+            excess = stock_value - capital
+            sell_qty = min(int((excess + 1e-6) // price), shares)
+            if sell_qty > 0:
+                shares -= sell_qty
+                cash += sell_qty * price
+                sell_count += 1
+                if record_log:
+                    hold_only_asset = initial_shares * price
+                    trade_log.append({
+                        "날짜": date, "구분": "매도", "가격": price, "수량": sell_qty,
+                        "현금잔고": cash, "보유주식수": shares,
+                        "주식평가금액": price * shares,
+                        "총자산": cash + price * shares,
+                        "등락률": (price - base_price) / base_price * 100,
+                        "매매안했을때자산": hold_only_asset,
+                        "차이": (price * shares + cash) - hold_only_asset,
+                    })
+        elif capital > 0 and stock_value <= capital * (1 - buy_trigger_percent / 100.0):
+            shortfall = capital - stock_value
+            recover_amount = min(shortfall * (buy_recover_percent / 100.0), shortfall)
+            desired_qty = int((recover_amount + 1e-6) // price) if price > 0 else 0
+            if allow_negative_cash:
+                buy_qty = desired_qty
+            else:
+                affordable_qty = int(cash // price) if price > 0 else 0
+                buy_qty = min(desired_qty, affordable_qty)
+            if buy_qty > 0:
+                shares += buy_qty
+                cash -= buy_qty * price
+                buy_count += 1
+                if record_log:
+                    hold_only_asset = initial_shares * price
+                    trade_log.append({
+                        "날짜": date, "구분": "매수", "가격": price, "수량": buy_qty,
+                        "현금잔고": cash, "보유주식수": shares,
+                        "주식평가금액": price * shares,
+                        "총자산": cash + price * shares,
+                        "등락률": (price - base_price) / base_price * 100,
+                        "매매안했을때자산": hold_only_asset,
+                        "차이": (price * shares + cash) - hold_only_asset,
+                    })
+
+        if record_log:
+            asset_log.append({
+                "날짜": date, "주가": price, "현금": cash, "보유주식수": shares,
+                "주식평가금액": price * shares, "total": price * shares + cash,
+            })
+
+    final_price = prices[-1]
+    stock_value = shares * final_price
+
+    return {
+        "주가": final_price,
+        "보유주식수": shares,
+        "주식_평가금액": stock_value,
+        "현금": cash,
+        "total": stock_value + cash,
+        "매도횟수": sell_count,
+        "매수횟수": buy_count,
+        "기준가": base_price,
+        "자본금": capital,
+        "매매일지": trade_log if record_log else [],
+        "자산추이": asset_log if record_log else [],
+    }
+
+
+def capital_recovery_strategy(
+    df: pd.DataFrame,
+    initial_shares: int = 100,
+    base_price: float = None,
+    buy_trigger_percent: float = 10.0,
+    buy_recover_percent: float = 100.0,
+    allow_negative_cash: bool = False,
+    price_col: str = "종가",
+    date_col: str = "날짜",
+) -> dict:
+    """
+    "자본 회수" 전략 — 기준가(기본값: 첫날 종가, 입력하면 그 값)로 **자본금**
+    (기준가 × initial_shares)을 정하고, 주식 평가금액이 그 자본금을 넘어서면(=주가가
+    기준가보다 오르면) 넘어선 만큼만 정수 주식 단위로 팔아 현금으로 회수한다. 반대로 주식
+    평가금액이 자본금 대비 buy_trigger_percent% 이상 내려가면 부족분 중
+    buy_recover_percent%만큼만 사서 채운다(자본금을 넘어서 사지는 않음). 기준가는
+    daily_reference_strategy()처럼 매매 시 갱신되지 않고 처음 값 그대로 끝까지 고정된다.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        get_stock_data()로 얻은 일별 시세. 날짜 오름차순/내림차순 상관없이 내부에서 정렬함.
+    initial_shares : int
+        시작 보유 주식 수 (기본 100)
+    base_price : float, optional
+        자본금 계산의 기준이 되는 가격. 비우면(None) 첫날 종가를 사용한다.
+    buy_trigger_percent : float
+        매수를 촉발하는, 자본금 대비 주식 평가금액 하락폭(%) 임계값 (기본 10%)
+    buy_recover_percent : float
+        매수 시 부족분(자본금 − 주식평가금액) 중 채울 비율(%) (기본 100%, 즉 자본금까지
+        최대한 채움)
+    allow_negative_cash : bool
+        True면 현금 잔고와 무관하게 계산된 매수 수량을 그대로 매수한다(현금이 마이너스가
+        될 수 있음). False(기본)면 쌓인 현금 범위 내에서만 매수한다.
+    price_col : str
+        기준으로 삼을 가격 컬럼명 (기본 '종가')
+    date_col : str
+        날짜 컬럼명 (기본 '날짜'), 매매일지에 사용
+
+    Returns
+    -------
+    dict
+        {
+            "주가": 마지막 날 가격,
+            "보유주식수": 최종 보유 주식 수,
+            "주식_평가금액": 보유주식수 * 마지막 날 가격,
+            "현금": 최종 현금,
+            "total": 주식_평가금액 + 현금,
+            "매도횟수": ...,
+            "매수횟수": ...,
+            "기준가": 실제 적용된 기준가,
+            "자본금": 기준가 * initial_shares,
+            "매매일지": [{"날짜":..., "구분":"매도/매수", "가격":..., "수량":...,
+                       "현금잔고":..., "보유주식수":..., "주식평가금액":...,
+                       "총자산": 현금잔고+주식평가금액,
+                       "등락률": (가격-기준가)/기준가*100,
+                       "매매안했을때자산":..., "차이":...}, ...],
+            "자산추이": [...],  # 첫날부터 마지막 날까지 매일의 스냅샷 (그래프용)
+        }
+    """
+    if df.empty:
+        raise ValueError("데이터가 없습니다.")
+    if initial_shares < 0:
+        raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+    if base_price is not None and base_price <= 0:
+        raise ValueError("기준가는 0보다 커야 합니다.")
+    if buy_trigger_percent <= 0:
+        raise ValueError("매수 트리거 gap은 0보다 커야 합니다.")
+    if buy_recover_percent <= 0:
+        raise ValueError("매수 회복률은 0보다 커야 합니다.")
+
+    sorted_df = df.sort_values(date_col).reset_index(drop=True)
+    dates = sorted_df[date_col].tolist()
+    prices = sorted_df[price_col].tolist()
+    resolved_base = base_price if base_price is not None else prices[0]
+
+    return _simulate_capital_recovery(
+        prices, dates, initial_shares, resolved_base,
+        buy_trigger_percent, buy_recover_percent,
+        allow_negative_cash=allow_negative_cash, record_log=True,
+    )
+
+
+def _run_capital_recovery_fast(
+    prices: list,
+    initial_shares: int,
+    base_price: float,
+    buy_trigger_percent: float,
+    buy_recover_percent: float,
+    allow_negative_cash: bool = False,
+) -> dict:
+    """
+    capital_recovery_strategy()와 완전히 동일한 로직이지만, 매매일지를 기록하지 않아 수천 번
+    반복 계산(히트맵용)할 때 빠르게 동작한다.
+    """
+    return _simulate_capital_recovery(
+        prices, None, initial_shares, base_price,
+        buy_trigger_percent, buy_recover_percent,
+        allow_negative_cash=allow_negative_cash, record_log=False,
+    )
+
+
+def compute_capital_recovery_heatmap(
+    df: pd.DataFrame,
+    buy_trigger_values,
+    buy_recover_values,
+    initial_shares: int = 100,
+    base_price: float = None,
+    allow_negative_cash: bool = False,
+    price_col: str = "종가",
+    date_col: str = "날짜",
+) -> dict:
+    """
+    capital_recovery_strategy() 전용 히트맵: **매수 트리거 gap(%)** x **매수 회복률(%)**
+    조합별 최종 수익률(%)을 계산한다. 기준가/시작 보유 주식수/현금 부족해도 매수 여부는
+    폼에서 고정값으로 받는다(스윕 대상이 아님).
+
+    Parameters
+    ----------
+    buy_trigger_values : iterable[float]
+        매수 트리거 gap(%) 값 목록 (자본금 대비 주식평가금액 하락폭 임계값)
+    buy_recover_values : iterable[float]
+        매수 회복률(%) 값 목록 (부족분 중 채울 비율)
+    base_price : float, optional
+        자본금 계산의 기준이 되는 가격. 비우면(None) 첫날 종가를 사용한다.
+
+    Returns
+    -------
+    dict
+        {
+            "triggers": [...], "recovers": [...],
+            "grid": [[회복률별 수익률(%), ...], ...]  # grid[i][j] = triggers[i] x recovers[j]
+            "best": {"buy_trigger_pct":..., "buy_recover_pct":..., "profit_pct":..., "total":...},
+            "worst": {...},
+            "top10": [...], "bottom10": [...],  # 상위/하위 10 (수익률 중복 제거)
+            "ranked": [...],   # 전체 조합(중복 제거), max -> min 순
+            "raw_ranked": [...],  # 전체 조합(중복 미제거), max -> min 순
+            "initial_asset": 시작 자산,
+            "hold_only_asset": 매매 안 했을 때 최종 자산,
+            "기준가": 실제 적용된 기준가,
+            "자본금": 기준가 * initial_shares,
+        }
+
+    top10/bottom10/ranked는 수익률이 같은 조합이 여러 개면 그중 하나만 남긴다(중복 제거).
+    남기는 기준: 트리거gap이 가장 작은 조합 우선, 같으면 회복률이 가장 작은 조합.
+    (grid 전체, best/worst, raw_ranked에는 중복 제거를 적용하지 않는다.)
+    """
+    if df.empty:
+        raise ValueError("데이터가 없습니다.")
+    if initial_shares < 0:
+        raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+    if base_price is not None and base_price <= 0:
+        raise ValueError("기준가는 0보다 커야 합니다.")
+
+    sorted_df = df.sort_values(date_col)
+    prices = sorted_df[price_col].tolist()
+
+    resolved_base = base_price if base_price is not None else prices[0]
+    capital = resolved_base * initial_shares
+
+    first_price = prices[0]
+    initial_asset = initial_shares * first_price
+    hold_only_asset = initial_shares * prices[-1]
+
+    triggers = list(buy_trigger_values)
+    recovers = list(buy_recover_values)
+
+    grid = []
+    all_combos = []
+    best = {"buy_trigger_pct": None, "buy_recover_pct": None, "profit_pct": float("-inf")}
+    worst = {"buy_trigger_pct": None, "buy_recover_pct": None, "profit_pct": float("inf")}
+
+    for t in triggers:
+        row = []
+        for r in recovers:
+            run_result = _run_capital_recovery_fast(
+                prices, initial_shares, resolved_base, t, r,
+                allow_negative_cash=allow_negative_cash,
+            )
+            total = run_result["total"]
+            profit_pct = (total - initial_asset) / initial_asset * 100 if initial_asset else 0.0
+            row.append(profit_pct)
+            combo = {
+                "buy_trigger_pct": t, "buy_recover_pct": r, "profit_pct": profit_pct, "total": total,
+                "매매안했을때자산": hold_only_asset, "차이": total - hold_only_asset,
+                "매수횟수": run_result["매수횟수"], "매도횟수": run_result["매도횟수"],
+            }
+            all_combos.append(combo)
+            if profit_pct > best["profit_pct"]:
+                best = combo
+            if profit_pct < worst["profit_pct"]:
+                worst = combo
+        grid.append(row)
+
+    # top10/bottom10/ranked는 수익률이 같은 조합을 중복 제거한 뒤 뽑는다: 같은 수익률이면
+    # 트리거gap이 가장 작은 조합을, 트리거gap도 같으면 회복률이 가장 작은 조합을 남긴다.
+    seen_profit_pct = set()
+    dedup_combos = []
+    for combo in all_combos:
+        key = round(combo["profit_pct"], 6)
+        if key in seen_profit_pct:
+            continue
+        seen_profit_pct.add(key)
+        dedup_combos.append(combo)
+
+    dedup_combos.sort(key=lambda c: c["profit_pct"], reverse=True)
+    top10 = dedup_combos[:10]
+    bottom10 = list(reversed(dedup_combos[-10:]))
+    ranked = dedup_combos
+    raw_ranked = sorted(all_combos, key=lambda c: c["profit_pct"], reverse=True)
+
+    return {
+        "triggers": triggers, "recovers": recovers, "grid": grid,
+        "best": best, "worst": worst,
+        "top10": top10, "bottom10": bottom10,
+        "ranked": ranked, "raw_ranked": raw_ranked,
+        "initial_asset": initial_asset, "hold_only_asset": hold_only_asset,
+        "기준가": resolved_base, "자본금": capital,
+    }
+
+
 def compute_daily_reference_heatmap_2d(
     df: pd.DataFrame,
     x_feature: str,

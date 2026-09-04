@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>자본 회수 히트맵 — 매수 트리거 × 매수 회복률</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --up: #d24343;
+    --down: #2a6fd6;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --border: #e3e5e8;
+    --text: #1f2328;
+    --muted: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 32px 16px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  .nav {
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .nav .nav-home { color: #2a6fd6; text-decoration: none; font-weight: 600; }
+  .nav .nav-home:hover { text-decoration: underline; }
+  .nav .nav-home.active { color: var(--text); text-decoration: underline; }
+  .nav .nav-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 14px 5px 12px;
+  }
+  .nav .nav-group-label {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding-right: 8px;
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .nav .nav-group a { color: #2a6fd6; text-decoration: none; white-space: nowrap; }
+  .nav .nav-group a:hover { text-decoration: underline; }
+  .nav .nav-group a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--card);
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field .hint { font-weight: 400; color: var(--muted); }
+  form select, form input {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  form select { min-width: 180px; }
+  form input[type="number"] { width: 110px; }
+  form button {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #1f2328;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    height: 41px;
+  }
+  form button:hover { background: #3b3f45; }
+  .checkbox-field { flex-direction: row; align-items: center; }
+  .checkbox-field label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--text); white-space: nowrap;
+  }
+  .checkbox-field input[type="checkbox"] { width: 16px; height: 16px; }
+
+  .empty {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .empty a { color: #2a6fd6; }
+
+  .error {
+    background: #fdecec;
+    color: var(--up);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 14px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 12px 0; }
+
+  .callout-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+  }
+  .callout {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    border-radius: 10px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    transition: transform 0.1s ease;
+  }
+  .callout:hover { transform: translateY(-1px); }
+  .callout.best { background: #fdecec; border-color: #f6c6c6; }
+  .callout.worst { background: #eaf1fc; border-color: #c4d9f7; }
+  .callout .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .callout .pct { font-size: 22px; font-weight: 700; }
+  .callout.best .pct { color: var(--up); }
+  .callout.worst .pct { color: var(--down); }
+  .callout .final { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 2px; }
+  .callout .cond { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+  .heatmap-scroll { overflow-x: auto; padding-bottom: 8px; }
+  .heatmap-outer { display: inline-flex; gap: 6px; }
+  .axis-y-label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+  }
+  .heatmap-col { display: flex; flex-direction: column; gap: 6px; }
+  .heatmap-grid {
+    display: grid;
+    grid-template-columns: repeat(50, 12px);
+    grid-auto-rows: 12px;
+    gap: 1px;
+  }
+  .heatmap-cell {
+    display: block;
+    width: 12px;
+    height: 12px;
+  }
+  .heatmap-cell.best { outline: 2px solid #111827; outline-offset: -1px; }
+  .heatmap-cell.worst { outline: 2px solid #111827; outline-offset: -1px; }
+  .axis-x-label {
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+  }
+  .legend {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 14px;
+  }
+  .legend-bar {
+    width: 160px;
+    height: 10px;
+    border-radius: 5px;
+    background: linear-gradient(to right, var(--down), #f5f6f8, var(--up));
+  }
+
+  .rank-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 20px;
+  }
+  .rank-col { overflow-x: auto; }
+  .rank-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+  .rank-title.up { color: var(--up); }
+  .rank-title.down { color: var(--down); }
+  .rank-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .rank-table th, .rank-table td {
+    padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap;
+  }
+  .rank-table th:first-child, .rank-table td:first-child { text-align: left; color: var(--muted); }
+  .rank-table th { color: var(--muted); font-weight: 600; }
+  .rank-table td a { color: inherit; text-decoration: none; display: block; }
+  .rank-table tbody tr:hover { background: var(--bg); }
+  .rank-table td.up a { color: var(--up); font-weight: 600; }
+  .rank-table td.down a { color: var(--down); font-weight: 600; }
+  .rank-table tr.best-row { background: #fdecec; }
+  .rank-table tr.worst-row { background: #eaf1fc; }
+
+  .ranked-details summary {
+    cursor: pointer;
+    list-style: none;
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .ranked-details summary::-webkit-details-marker { display: none; }
+  .ranked-details summary::before {
+    content: "▸ ";
+    display: inline-block;
+    transition: transform 0.15s ease;
+  }
+  .ranked-details[open] summary::before { content: "▾ "; }
+  .ranked-scroll {
+    max-height: 480px;
+    overflow-y: auto;
+    overflow-x: auto;
+    margin-top: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .ranked-scroll .rank-table th {
+    position: sticky;
+    top: 0;
+    background: var(--card);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  {% include "_nav.html" %}
+  <h1>💰🔥 자본 회수 히트맵 — 매수 트리거 × 매수 회복률</h1>
+  <p class="sub">
+    "자본 회수"(주식 평가금액이 자본금을 넘으면 초과분을 팔고, 자본금 대비 <b>매수 트리거
+    gap%</b> 이상 내려가면 부족분 중 <b>매수 회복률%</b>만큼 사서 채우는) 전략에서 두 값의
+    범위를 지정하면 그 조합별(1% 단위) 수익률을 한번에 계산합니다. 기준가·시작 보유
+    주식수·현금 부족해도 매수 여부는 아래에서 고정값으로 입력합니다(스윕 대상 아님).
+    저장된 로컬 CSV만 사용하므로 네이버에 다시 접속하지 않습니다. 각 칸을 클릭하면 그 조건
+    그대로 자본 회수 페이지로 이동해 매매일지를 볼 수 있습니다.
+  </p>
+
+  {% if files %}
+  <form method="get" action="/heatmap7" id="heatmapForm">
+    <div class="form-row">
+      {% include "_csv_file_selector.html" %}
+      <div class="field">
+        <label for="init_shares">시작 보유 주식수</label>
+        <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
+      </div>
+      <div class="field">
+        <label for="base_price">기준가 <span class="hint">비우면 첫날 종가</span></label>
+        <input type="number" name="base_price" id="base_price" step="0.01" min="0.01" value="{{ base_price }}" placeholder="첫날 종가">
+      </div>
+      <div class="field checkbox-field">
+        <label>
+          <input type="checkbox" name="allow_negative_cash" value="on" {% if allow_negative_cash %}checked{% endif %}>
+          현금 부족해도 매수
+        </label>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="field">
+        <label for="trigger_min">매수 트리거 gap 하한(%)</label>
+        <input type="number" name="trigger_min" id="trigger_min" min="1" value="{{ trigger_min }}" required>
+      </div>
+      <div class="field">
+        <label for="trigger_max">매수 트리거 gap 상한(%)</label>
+        <input type="number" name="trigger_max" id="trigger_max" min="1" value="{{ trigger_max }}" required>
+      </div>
+      <div class="field">
+        <label for="recover_min">매수 회복률 하한(%)</label>
+        <input type="number" name="recover_min" id="recover_min" min="1" value="{{ recover_min }}" required>
+      </div>
+      <div class="field">
+        <label for="recover_max">매수 회복률 상한(%)</label>
+        <input type="number" name="recover_max" id="recover_max" min="1" value="{{ recover_max }}" required>
+      </div>
+      <button type="submit">히트맵 계산</button>
+    </div>
+  </form>
+
+  {% else %}
+  <div class="empty">
+    저장된 데이터가 없습니다. <a href="/">메인 페이지</a>에서 종목을 먼저 조회해주세요.<br>
+    (조회한 데이터는 자동으로 로컬 CSV에 저장되어 여기서 재사용됩니다.)
+  </div>
+  {% endif %}
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {% include "_fetch_note.html" %}
+
+  {% if cells %}
+    <div class="card">
+      <h2>
+        {{ code }} — 기준가 {{ "{:,.0f}".format(resolved_base_price) }} / 자본금
+        {{ "{:,.0f}".format(capital) }} / 시작 {{ "{:,}".format(init_shares|int) }}주 / 시작 자산
+        {{ "{:,.0f}".format(initial_asset) }}
+        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분)
+      </h2>
+      <div class="callout-grid">
+        <a class="callout best" href="{{ best_link }}">
+          <div class="label">🔺 최대 수익률</div>
+          <div class="pct">{{ "{:+.2f}".format(best["profit_pct"]) }}%</div>
+          <div class="final">최종자산 {{ "{:,.0f}".format(best["total"]) }}</div>
+          <div class="cond">트리거 {{ best["buy_trigger_pct"] }}% / 회복률 {{ best["buy_recover_pct"] }}% / 매도 {{ best["매도횟수"] }}회 / 매수 {{ best["매수횟수"] }}회</div>
+        </a>
+        <a class="callout worst" href="{{ worst_link }}">
+          <div class="label">🔻 최소 수익률</div>
+          <div class="pct">{{ "{:+.2f}".format(worst["profit_pct"]) }}%</div>
+          <div class="final">최종자산 {{ "{:,.0f}".format(worst["total"]) }}</div>
+          <div class="cond">트리거 {{ worst["buy_trigger_pct"] }}% / 회복률 {{ worst["buy_recover_pct"] }}% / 매도 {{ worst["매도횟수"] }}회 / 매수 {{ worst["매수횟수"] }}회</div>
+        </a>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>수익률 상위/하위 10</h2>
+      <p class="sub" style="margin-bottom: 4px; font-size: 12px;">
+        시작 자산 {{ "{:,.0f}".format(initial_asset) }} · 매매 안 했을 때 최종 자산 {{ "{:,.0f}".format(hold_only_asset) }}
+      </p>
+      <p class="sub" style="margin-bottom: 16px; font-size: 12px;">
+        수익률이 동일한 조합은 중복 제거되어 하나만 표시됩니다 (같은 수익률 중 트리거gap이 가장 작은 조합, 트리거gap도 같으면 회복률이 가장 작은 조합을 노출). "보유 대비"는 매매 안 했을 때 최종 자산과 비교한 차이(%)입니다.
+      </p>
+      <div class="rank-grid">
+        <div class="rank-col">
+          <div class="rank-title up">🔺 상위 10</div>
+          <table class="rank-table">
+            <thead><tr><th>#</th><th>트리거%</th><th>회복률%</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
+            <tbody>
+              {% for c in top10 %}
+              <tr class="{{ 'best-row' if loop.index == 1 }}">
+                <td>{{ loop.index }}</td>
+                <td><a href="{{ c.link }}">{{ c.buy_trigger_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.buy_recover_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
+                <td class="up"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="rank-col">
+          <div class="rank-title down">🔻 하위 10</div>
+          <table class="rank-table">
+            <thead><tr><th>#</th><th>트리거%</th><th>회복률%</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
+            <tbody>
+              {% for c in bottom10 %}
+              <tr class="{{ 'worst-row' if loop.index == 1 }}">
+                <td>{{ loop.index }}</td>
+                <td><a href="{{ c.link }}">{{ c.buy_trigger_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.buy_recover_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
+                <td class="down"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>히트맵 (세로: 매수 트리거 {{ triggers[0] }}~{{ triggers[-1] }}%, 가로: 매수 회복률 {{ recovers[0] }}~{{ recovers[-1] }}%)</h2>
+      <div class="heatmap-scroll">
+        <div class="heatmap-outer">
+          <div class="axis-y-label">매수 트리거 gap (%) — 아래로 갈수록 큼</div>
+          <div class="heatmap-col">
+            <div class="heatmap-grid" style="grid-template-columns: repeat({{ recovers|length }}, 12px);">
+              {% for cell in cells %}
+              <a class="heatmap-cell {% if cell.is_best %}best{% elif cell.is_worst %}worst{% endif %}"
+                 href="{{ cell.link }}"
+                 style="background-color: {{ cell.color }};"
+                 title="트리거 {{ cell.buy_trigger_pct }}% / 회복률 {{ cell.buy_recover_pct }}% → {{ '{:+.2f}'.format(cell.pct) }}% (최종자산 {{ '{:,.0f}'.format(cell.total) }})">
+              </a>
+              {% endfor %}
+            </div>
+            <div class="axis-x-label">매수 회복률 (%, 부족분 중 채울 비율) — 오른쪽으로 갈수록 큼</div>
+          </div>
+        </div>
+      </div>
+      <div class="legend">
+        <span>손실</span>
+        <span class="legend-bar"></span>
+        <span>수익</span>
+        <span style="margin-left: 12px;">테두리 강조 = 최대/최소 수익률 칸</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>순위별 수익률 변화</h2>
+      <div class="field" style="margin-bottom: 12px; flex-direction: row; align-items: center; gap: 6px;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color: var(--text);">
+          <input type="checkbox" id="rankChartDedup" checked>
+          중복 수익률 제거
+        </label>
+      </div>
+      <canvas id="rankChart" height="90"></canvas>
+    </div>
+
+    <div class="card">
+      <details class="ranked-details">
+        <summary>전체 수익률 보기 (max → min, {{ ranked|length }}개, 중복 수익률 제거)</summary>
+        <p class="sub" style="margin: 8px 0 0 0; font-size: 12px;">
+          시작 자산 {{ "{:,.0f}".format(initial_asset) }} · 매매 안 했을 때 최종 자산 {{ "{:,.0f}".format(hold_only_asset) }} · "보유 대비"는 그 자산과 비교한 차이(%)입니다.
+        </p>
+        <div class="ranked-scroll">
+          <table class="rank-table">
+            <thead><tr><th>#</th><th>트리거%</th><th>회복률%</th><th>매도횟수</th><th>매수횟수</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
+            <tbody>
+              {% for c in ranked %}
+              <tr class="{{ 'best-row' if loop.index == 1 }}{{ ' worst-row' if loop.index == ranked|length }}">
+                <td>{{ loop.index }}</td>
+                <td><a href="{{ c.link }}">{{ c.buy_trigger_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.buy_recover_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c['매도횟수'] }}</a></td>
+                <td><a href="{{ c.link }}">{{ c['매수횟수'] }}</a></td>
+                <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
+                <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+
+    <script>
+      const RANK_CHART_DEDUP = {{ ranked | tojson }};
+      const RANK_CHART_RAW = {{ ranked_raw | tojson }};
+
+      function toRankChartData(list) {
+        return {
+          labels: list.map((_, i) => i + 1),
+          data: list.map(c => c.profit_pct),
+        };
+      }
+
+      let rankChartSource = RANK_CHART_DEDUP;
+      const rankChartData = toRankChartData(rankChartSource);
+
+      const rankChart = new Chart(document.getElementById('rankChart'), {
+        type: 'line',
+        data: {
+          labels: rankChartData.labels,
+          datasets: [{
+            label: '수익률',
+            data: rankChartData.data,
+            borderColor: '#1f2328',
+            backgroundColor: 'rgba(31,35,40,0.05)',
+            borderWidth: 1.5,
+            tension: 0,
+            fill: true,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+          }]
+        },
+        options: {
+          responsive: true,
+          animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: (items) => items.length ? `순위 ${items[0].label}` : '',
+                label: (item) => {
+                  const c = rankChartSource[item.dataIndex];
+                  const sign = c.profit_pct >= 0 ? '+' : '';
+                  return `${sign}${c.profit_pct.toFixed(2)}%  최종자산 ${Math.round(c.total).toLocaleString()}  (트리거 ${c.buy_trigger_pct}% / 회복률 ${c.buy_recover_pct}% / 매도 ${c['매도횟수']} / 매수 ${c['매수횟수']})`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { title: { display: true, text: '순위' }, ticks: { maxTicksLimit: 20 } },
+            y: { title: { display: true, text: '수익률 (%)' } },
+          }
+        }
+      });
+
+      document.getElementById('rankChartDedup').addEventListener('change', (e) => {
+        rankChartSource = e.target.checked ? RANK_CHART_DEDUP : RANK_CHART_RAW;
+        const next = toRankChartData(rankChartSource);
+        rankChart.data.labels = next.labels;
+        rankChart.data.datasets[0].data = next.data;
+        rankChart.update();
+      });
+    </script>
+  {% endif %}
+</div>
+</body>
+</html>
