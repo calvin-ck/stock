@@ -68,15 +68,21 @@
     border: 1px solid var(--border);
     margin-bottom: 24px;
     flex-wrap: wrap;
+    align-items: flex-end;
   }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field .hint { font-weight: 400; color: var(--muted); }
+  .field-code { flex: 1; min-width: 140px; }
   form input {
     padding: 10px 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
     font-size: 14px;
   }
-  form input[name="code"] { flex: 1; min-width: 140px; }
-  form input[name="days"] { width: 90px; }
+  .field-code input { width: 100%; }
+  form input[name="period"] { width: 90px; }
+  form input[name="end_date"], form input[name="start_date"] { width: 150px; }
   form button {
     padding: 10px 18px;
     border: none;
@@ -85,6 +91,7 @@
     color: white;
     font-size: 14px;
     cursor: pointer;
+    height: 41px;
   }
   form button:hover { background: #3b3f45; }
 
@@ -166,13 +173,43 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>📈 네이버 주식 시세 조회</h1>
-  <p class="sub">종목 코드와 기간(오늘부터 며칠 전까지)을 입력하세요. 예: 삼성전자 005930, 카카오 035720</p>
+  <p class="sub">
+    종목 코드와 종료일(없으면 오늘) + 시작일 또는 기간을 입력하세요.
+    예: 삼성전자 005930, 카카오 035720
+  </p>
 
   <form method="get" action="/">
-    <input type="text" name="code" placeholder="종목 코드 (예: 102110)" value="{{ code }}" required>
-    <input type="number" name="days" min="1" placeholder="기간(일)" value="{{ days }}" required>
+    <div class="field field-code">
+      <label for="code">종목 코드</label>
+      <input type="text" name="code" id="code" placeholder="예: 102110" value="{{ code }}" required>
+    </div>
+    <div class="field">
+      <label for="end_date">종료일 <span class="hint">비우면 오늘</span></label>
+      <input type="date" name="end_date" id="end_date" value="{{ end_date }}">
+    </div>
+    <div class="field">
+      <label for="start_date">시작일 <span class="hint">입력하면 기간 대신 사용</span></label>
+      <input type="date" name="start_date" id="start_date" value="{{ start_date }}">
+    </div>
+    <div class="field">
+      <label for="period">기간(일) <span class="hint">시작일 비우면 사용, 기본 30일</span></label>
+      <input type="number" name="period" id="period" min="1" value="{{ period }}">
+    </div>
     <button type="submit">조회</button>
   </form>
+  <script>
+    (function () {
+      var startInput = document.getElementById('start_date');
+      var periodInput = document.getElementById('period');
+      if (!startInput || !periodInput) return;
+      startInput.addEventListener('input', function () {
+        if (startInput.value) periodInput.value = '';
+      });
+      periodInput.addEventListener('input', function () {
+        if (periodInput.value) startInput.value = '';
+      });
+    })();
+  </script>
 
   {% if source_url %}
     <div class="source-url">
@@ -184,10 +221,12 @@
     <div class="error">{{ error }}</div>
   {% endif %}
 
+  {% include "_fetch_note.html" %}
+
   {% if table %}
     <div class="card">
       <h2>
-        {{ name or code }}{% if name %} ({{ code }}){% endif %} — 최근 {{ days }}일 종가 추이
+        {{ name or code }}{% if name %} ({{ code }}){% endif %} — {{ start_date }} ~ {{ end_date }} 종가 추이 ({{ applied_period }}일)
         {% if from_cache %}<span style="font-weight:400;font-size:13px;color:var(--muted);">(로컬 캐시 재사용, 네이버 재조회 안 함)</span>{% endif %}
       </h2>
       <canvas id="priceChart"></canvas>
@@ -198,7 +237,7 @@
         <h2>일별 시세 ({{ table|length }}건)</h2>
         <div class="card-actions">
           <button type="button" class="btn-toggle" id="toggleTableBtn" onclick="toggleTable()">테이블 숨기기</button>
-          <a class="btn-csv" href="{{ url_for('download_csv', code=code, days=days) }}">⬇ CSV로 저장</a>
+          <a class="btn-csv" href="{{ url_for('download_csv', code=code, end_date=end_date, start_date=start_date) }}">⬇ CSV로 저장</a>
         </div>
       </div>
       <div class="table-wrap" id="tableWrap">

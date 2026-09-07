@@ -142,9 +142,77 @@ def _parse_change_column(text_series: pd.Series, direction_series: pd.Series) ->
     )
 
 
+def get_stock_data_range(
+    code: str, start_date: datetime, end_date: datetime = None, sleep: float = 0.2,
+) -> pd.DataFrame:
+    """
+    start_date ~ end_date(포함, 기본 오늘)까지의 일별 시세를 가져온다.
+
+    네이버 일별시세 페이지는 조회 시점과 무관하게 항상 "오늘까지의 전체 이력"을 최신순으로
+    페이징해서 보여준다 — 즉 특정 과거 날짜의 시세는 언제 조회하든 항상 같은 값이다. 그래서
+    end_date가 오늘보다 과거라도 그날 이후 데이터가 섞여 들어오는 것을 막을 방법은 없고(항상
+    page 1=오늘 근처부터 시작), 대신 다 받은 뒤 [start_date, end_date] 범위로 걸러낸다.
+
+    Parameters
+    ----------
+    code : str
+        종목 코드 (예: '005930' 삼성전자)
+    start_date : datetime
+        가져올 가장 오래된 날짜(포함)
+    end_date : datetime, optional
+        가져올 가장 최근 날짜(포함). 비우면 오늘.
+    sleep : float
+        페이지 요청 사이 대기 시간 (과도한 요청 방지용)
+
+    Returns
+    -------
+    pd.DataFrame  columns=[날짜, 시가, 종가, 전일비, 고가, 저가, 거래량]
+        최신 날짜가 맨 위로 정렬됨.
+    """
+    end_date = end_date or datetime.now()
+
+    all_rows = []
+    page = 1
+    max_pages = 500  # 무한루프 방지용 안전장치
+
+    while page <= max_pages:
+        df = fetch_page(code, page)
+        if df.empty:
+            break
+
+        df["날짜"] = pd.to_datetime(df["날짜"], format="%Y.%m.%d")
+        all_rows.append(df)
+
+        oldest_in_page = df["날짜"].min()
+        if oldest_in_page <= start_date:
+            break
+
+        page += 1
+        time.sleep(sleep)
+
+    if not all_rows:
+        return pd.DataFrame()
+
+    result = pd.concat(all_rows, ignore_index=True)
+    result = result[(result["날짜"] >= start_date) & (result["날짜"] <= end_date)]
+    result = result.drop_duplicates(subset="날짜")
+    result = result.sort_values("날짜", ascending=False).reset_index(drop=True)
+
+    for col in ["종가", "시가", "고가", "저가", "거래량"]:
+        result[col] = pd.to_numeric(
+            result[col].astype(str).str.replace(",", "", regex=False),
+            errors="coerce",
+        )
+    result["전일비"] = _parse_change_column(result["전일비"], result["전일비_방향"])
+    result = result.drop(columns=["전일비_방향"])
+    result = result[["날짜", "시가", "종가", "전일비", "고가", "저가", "거래량"]]
+
+    return result
+
+
 def get_stock_data(code: str, days: int, sleep: float = 0.2) -> pd.DataFrame:
     """
-    오늘부터 `days`일 전까지의 일별 시세를 가져온다.
+    오늘부터 `days`일 전까지의 일별 시세를 가져온다. get_stock_data_range()의 얇은 래퍼.
 
     Parameters
     ----------
@@ -160,45 +228,8 @@ def get_stock_data(code: str, days: int, sleep: float = 0.2) -> pd.DataFrame:
     pd.DataFrame  columns=[날짜, 시가, 종가, 전일비, 고가, 저가, 거래량]
         최신 날짜가 맨 위로 정렬됨.
     """
-    cutoff = datetime.now() - timedelta(days=days)
-
-    all_rows = []
-    page = 1
-    max_pages = 500  # 무한루프 방지용 안전장치
-
-    while page <= max_pages:
-        df = fetch_page(code, page)
-        if df.empty:
-            break
-
-        df["날짜"] = pd.to_datetime(df["날짜"], format="%Y.%m.%d")
-        all_rows.append(df)
-
-        oldest_in_page = df["날짜"].min()
-        if oldest_in_page <= cutoff:
-            break
-
-        page += 1
-        time.sleep(sleep)
-
-    if not all_rows:
-        return pd.DataFrame()
-
-    result = pd.concat(all_rows, ignore_index=True)
-    result = result[result["날짜"] >= cutoff]
-    result = result.drop_duplicates(subset="날짜")
-    result = result.sort_values("날짜", ascending=False).reset_index(drop=True)
-
-    for col in ["종가", "시가", "고가", "저가", "거래량"]:
-        result[col] = pd.to_numeric(
-            result[col].astype(str).str.replace(",", "", regex=False),
-            errors="coerce",
-        )
-    result["전일비"] = _parse_change_column(result["전일비"], result["전일비_방향"])
-    result = result.drop(columns=["전일비_방향"])
-    result = result[["날짜", "시가", "종가", "전일비", "고가", "저가", "거래량"]]
-
-    return result
+    now = datetime.now()
+    return get_stock_data_range(code, now - timedelta(days=days), now, sleep=sleep)
 
 
 def _simulate_grid(
@@ -556,6 +587,325 @@ def resolve_trade_qty(initial_shares: int, qty_percent: float) -> int:
     다시 계산하지 않는다 — 지금까지의 "고정 수량" 매매 로직과 동일하게 동작한다.
     """
     return max(1, round(initial_shares * qty_percent / 100))
+
+
+def _simulate_trend(
+    prices: list,
+    dates,
+    sell_qty: int,
+    buy_qty: int,
+    initial_shares: int,
+    no_sell: bool = False,
+    no_buy: bool = False,
+    allow_negative_cash: bool = False,
+    record_log: bool = False,
+) -> dict:
+    """
+    "추세 매매" 전략의 실제 시뮬레이션 루프. trend_trade_strategy()와 _run_trend_fast()
+    둘 다 이 함수를 사용해서 로직이 어긋나지 않게 한다.
+
+    grid_trade_strategy()에서 트레일링 고점/저점(max/min)과 sell_gap/buy_gap 조건만 뺀
+    버전이다 — 오직 "전날 종가 대비 오늘 종가"만 보고 매매한다: 전날보다 **내리면 매도**,
+    **오르면 매수**한다. daily_reversal_strategy()와 정반대 방향이다(그쪽은 오르면 매도·
+    내리면 매수하는 역추세/평균회귀 방식이고, 이쪽은 하락을 함께 팔고 상승을 함께 사는
+    추세추종 방식).
+
+    record_log : True면 매매일지/자산추이를 기록해서 반환한다 (느림). False면 최종 결과만
+        계산한다 (빠름, 히트맵처럼 수천 번 반복 계산할 때 사용).
+    """
+    shares = initial_shares
+    cash = 0.0
+    sell_count = 0
+    buy_count = 0
+    trade_log = [] if record_log else None
+    asset_log = [] if record_log else None
+
+    if record_log:
+        asset_log.append({
+            "날짜": dates[0], "주가": prices[0], "현금": cash, "보유주식수": shares,
+            "주식평가금액": prices[0] * shares, "total": prices[0] * shares + cash,
+        })
+
+    prev_price = prices[0]
+    for i in range(1, len(prices)):
+        price = prices[i]
+        date = dates[i] if dates is not None else None
+
+        # 매도: 전날보다 내려간 날 (no_sell이면 건너뜀, 공매도 없음)
+        if not no_sell and price < prev_price and shares >= sell_qty:
+            shares -= sell_qty
+            cash += sell_qty * price
+            sell_count += 1
+            if record_log:
+                hold_only_asset = initial_shares * price
+                trade_log.append({
+                    "날짜": date, "구분": "매도", "가격": price, "수량": sell_qty,
+                    "현금잔고": cash, "보유주식수": shares, "주식평가금액": price * shares,
+                    "매매안했을때자산": hold_only_asset,
+                    "차이": (price * shares + cash) - hold_only_asset,
+                })
+
+        # 매수: 전날보다 올라간 날 (no_buy면 건너뜀)
+        if not no_buy and price > prev_price:
+            if allow_negative_cash:
+                actual_buy_qty = buy_qty
+            else:
+                affordable_qty = int(cash // price) if price > 0 else 0
+                actual_buy_qty = min(buy_qty, affordable_qty)
+
+            if actual_buy_qty > 0:
+                shares += actual_buy_qty
+                cash -= actual_buy_qty * price
+                buy_count += 1
+                if record_log:
+                    hold_only_asset = initial_shares * price
+                    trade_log.append({
+                        "날짜": date, "구분": "매수", "가격": price, "수량": actual_buy_qty,
+                        "현금잔고": cash, "보유주식수": shares, "주식평가금액": price * shares,
+                        "매매안했을때자산": hold_only_asset,
+                        "차이": (price * shares + cash) - hold_only_asset,
+                    })
+
+        if record_log:
+            asset_log.append({
+                "날짜": date, "주가": price, "현금": cash, "보유주식수": shares,
+                "주식평가금액": price * shares, "total": price * shares + cash,
+            })
+        prev_price = price
+
+    final_price = prices[-1]
+    stock_value = shares * final_price
+
+    return {
+        "주가": final_price,
+        "보유주식수": shares,
+        "주식_평가금액": stock_value,
+        "현금": cash,
+        "total": stock_value + cash,
+        "매도횟수": sell_count,
+        "매수횟수": buy_count,
+        "매매일지": trade_log if record_log else [],
+        "자산추이": asset_log if record_log else [],
+    }
+
+
+def trend_trade_strategy(
+    df: pd.DataFrame,
+    sell_qty: int,
+    buy_qty: int,
+    initial_shares: int = 100,
+    no_sell: bool = False,
+    no_buy: bool = False,
+    allow_negative_cash: bool = False,
+    price_col: str = "종가",
+    date_col: str = "날짜",
+) -> dict:
+    """
+    "추세 매매" 전략 — grid_trade_strategy()에서 트레일링 고점/저점(max/min)과
+    sell_gap/buy_gap 조건만 뺀 가장 단순한 형태. 오직 전날 종가 대비 오늘 종가만 보고,
+    **내리면 매도, 오르면 매수**한다(daily_reversal_strategy()의 역추세 방식과 정반대인
+    추세추종 방식).
+
+    규칙
+    ----
+    - 전날보다 **내린 날**: sell_qty만큼 매도한다(no_sell=True면 매도 자체를 하지 않음).
+      보유 주식수가 sell_qty보다 적으면 매도하지 않는다(공매도 없음).
+    - 전날보다 **오른 날**: buy_qty만큼 매수를 시도한다(no_buy=True면 매수 자체를 하지
+      않음). allow_negative_cash=True면 현금 잔고와 무관하게 buy_qty를 그대로 매수하고
+      (현금이 마이너스가 될 수 있음), False(기본)면 "쌓인 현금으로 살 수 있는 만큼"과
+      buy_qty 중 작은 값만큼만 매수한다.
+    - 전날과 같은 날: 아무 것도 하지 않는다.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        get_stock_data()로 얻은 일별 시세. 날짜 오름차순/내림차순 상관없이 내부에서 정렬함.
+    sell_qty : int
+        매도 시 거래할 주식 수 (보통 resolve_trade_qty()로 시작 보유 주식수 대비 %에서
+        계산해서 넘긴다).
+    buy_qty : int
+        매수 시도 시 거래할 주식 수 (마찬가지로 resolve_trade_qty() 사용 권장).
+    initial_shares : int
+        시작 보유 주식 수 (기본 100)
+    no_sell : bool
+        True면 매도를 하지 않는다 (매수는 정상 동작, 기본 False)
+    no_buy : bool
+        True면 매수를 하지 않는다 (매도는 정상 동작, 기본 False)
+    allow_negative_cash : bool
+        True면 현금 잔고와 무관하게 buy_qty를 그대로 매수한다 (현금이 마이너스가 될 수
+        있음). False(기본)면 쌓인 현금 범위 내에서만 매수한다.
+    price_col : str
+        기준으로 삼을 가격 컬럼명 (기본 '종가')
+    date_col : str
+        날짜 컬럼명 (기본 '날짜'), 매매일지에 사용
+
+    Returns
+    -------
+    dict
+        {
+            "주가": 마지막 날 가격,
+            "보유주식수": 최종 보유 주식 수,
+            "주식_평가금액": 보유주식수 * 마지막 날 가격,
+            "현금": 최종 현금,
+            "total": 주식_평가금액 + 현금,
+            "매도횟수": ...,
+            "매수횟수": ...,
+            "매매일지": [{"날짜":..., "구분":"매도/매수", "가격":..., "수량":...,
+                       "현금잔고":..., "보유주식수":..., "주식평가금액":...,
+                       "매매안했을때자산":..., "차이":...}, ...],
+            "자산추이": [...],  # 첫날부터 마지막 날까지 매일의 스냅샷 (그래프용)
+        }
+    """
+    if df.empty:
+        raise ValueError("데이터가 없습니다.")
+
+    sorted_df = df.sort_values(date_col).reset_index(drop=True)
+    dates = sorted_df[date_col].tolist()
+    prices = sorted_df[price_col].tolist()
+
+    return _simulate_trend(
+        prices, dates, sell_qty, buy_qty, initial_shares,
+        no_sell=no_sell, no_buy=no_buy, allow_negative_cash=allow_negative_cash,
+        record_log=True,
+    )
+
+
+def _run_trend_fast(
+    prices: list,
+    sell_qty: int,
+    buy_qty: int,
+    initial_shares: int = 100,
+    no_sell: bool = False,
+    no_buy: bool = False,
+    allow_negative_cash: bool = False,
+) -> dict:
+    """
+    trend_trade_strategy()와 완전히 동일한 로직이지만, 매매일지를 기록하지 않아 수천 번
+    반복 계산(히트맵용)할 때 빠르게 동작한다.
+    """
+    return _simulate_trend(
+        prices, None, sell_qty, buy_qty, initial_shares,
+        no_sell=no_sell, no_buy=no_buy, allow_negative_cash=allow_negative_cash,
+        record_log=False,
+    )
+
+
+def compute_trend_heatmap(
+    df: pd.DataFrame,
+    sell_qty_pct_values,
+    buy_qty_pct_values,
+    initial_shares: int = 100,
+    price_col: str = "종가",
+    date_col: str = "날짜",
+    no_sell: bool = False,
+    no_buy: bool = False,
+    allow_negative_cash: bool = False,
+) -> dict:
+    """
+    trend_trade_strategy() 전용 히트맵: 매도수량%(sell) x 매수수량%(buy) 조합별 최종
+    수익률(%)을 계산한다. 둘 다 시작 보유 주식수 대비 비율로, resolve_trade_qty()로 각각
+    독립적인 절대 수량으로 변환한 뒤 스윕한다. compute_daily_heatmap()과 같은 패턴이다.
+
+    Parameters
+    ----------
+    sell_qty_pct_values : iterable[float]
+        매도수량(%) 값 목록 (예: range(1, 51) -> 1~50%)
+    buy_qty_pct_values : iterable[float]
+        매수수량(%) 값 목록 (예: range(1, 51) -> 1~50%)
+    no_sell, no_buy, allow_negative_cash : trend_trade_strategy() 참고
+
+    Returns
+    -------
+    dict
+        {
+            "sell_pcts": [...], "buy_pcts": [...],
+            "grid": [[buy%별 수익률(%), ...], ...]  # grid[i][j] = sell_pcts[i] x buy_pcts[j] 조합
+            "best": {"sell_pct":..., "buy_pct":..., "sell_qty":..., "buy_qty":..., "profit_pct":..., "total":...},
+            "worst": {"sell_pct":..., "buy_pct":..., "sell_qty":..., "buy_qty":..., "profit_pct":..., "total":...},
+            "top10": [{"sell_pct":..., "buy_pct":..., "sell_qty":..., "buy_qty":...,
+                       "profit_pct":..., "total":..., "매수횟수":..., "매도횟수":...}, ...],  # 상위 10 (내림차순)
+            "bottom10": [...],  # 하위 10 (오름차순)
+            "ranked": [...],   # 전체 조합(중복 제거), max -> min 순
+            "raw_ranked": [...],  # 전체 조합(중복 미제거), max -> min 순
+            "initial_asset": 시작 자산,
+            "hold_only_asset": 매매 안 했을 때 최종 자산,
+        }
+
+    top10/bottom10/ranked는 수익률이 같은 조합이 여러 개면 그중 하나만 남긴다(중복 제거).
+    남기는 기준: 매도수량%이 가장 작은 조합 우선, 같으면 매수수량%이 가장 작은 조합.
+    (grid 전체, best/worst, raw_ranked에는 중복 제거를 적용하지 않는다.)
+    """
+    if df.empty:
+        raise ValueError("데이터가 없습니다.")
+
+    sorted_df = df.sort_values(date_col)
+    prices = sorted_df[price_col].tolist()
+
+    first_price = prices[0]
+    initial_asset = initial_shares * first_price
+    hold_only_asset = initial_shares * prices[-1]  # 매매 안 했을 때(그냥 보유) 최종 자산
+
+    sell_pcts = list(sell_qty_pct_values)
+    buy_pcts = list(buy_qty_pct_values)
+
+    grid = []
+    all_combos = []
+    best = {"sell_pct": None, "buy_pct": None, "profit_pct": float("-inf")}
+    worst = {"sell_pct": None, "buy_pct": None, "profit_pct": float("inf")}
+
+    for sp in sell_pcts:
+        sell_qty = resolve_trade_qty(initial_shares, sp)
+        row = []
+        for bp in buy_pcts:
+            buy_qty = resolve_trade_qty(initial_shares, bp)
+            run_result = _run_trend_fast(
+                prices, sell_qty=sell_qty, buy_qty=buy_qty, initial_shares=initial_shares,
+                no_sell=no_sell, no_buy=no_buy, allow_negative_cash=allow_negative_cash,
+            )
+            total = run_result["total"]
+            profit_pct = (total - initial_asset) / initial_asset * 100 if initial_asset else 0.0
+            row.append(profit_pct)
+            combo = {
+                "sell_pct": sp, "buy_pct": bp, "sell_qty": sell_qty, "buy_qty": buy_qty,
+                "profit_pct": profit_pct, "total": total,
+                "매매안했을때자산": hold_only_asset, "차이": total - hold_only_asset,
+                "매도횟수": run_result["매도횟수"], "매수횟수": run_result["매수횟수"],
+            }
+            all_combos.append(combo)
+            if profit_pct > best["profit_pct"]:
+                best = combo
+            if profit_pct < worst["profit_pct"]:
+                worst = combo
+        grid.append(row)
+
+    seen_profit_pct = set()
+    dedup_combos = []
+    for combo in all_combos:
+        key = round(combo["profit_pct"], 6)
+        if key in seen_profit_pct:
+            continue
+        seen_profit_pct.add(key)
+        dedup_combos.append(combo)
+
+    dedup_combos.sort(key=lambda c: c["profit_pct"], reverse=True)
+    top10 = dedup_combos[:10]
+    bottom10 = list(reversed(dedup_combos[-10:]))
+    ranked = dedup_combos
+    raw_ranked = sorted(all_combos, key=lambda c: c["profit_pct"], reverse=True)
+
+    return {
+        "sell_pcts": sell_pcts,
+        "buy_pcts": buy_pcts,
+        "grid": grid,
+        "best": best,
+        "worst": worst,
+        "top10": top10,
+        "bottom10": bottom10,
+        "ranked": ranked,
+        "raw_ranked": raw_ranked,
+        "initial_asset": initial_asset,
+        "hold_only_asset": hold_only_asset,
+    }
 
 
 def _simulate_daily(

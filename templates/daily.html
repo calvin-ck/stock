@@ -205,7 +205,7 @@
     매도하지 않습니다.
   </p>
 
-  {% if files %}
+  {% if codes %}
   <form method="get" action="/daily" id="dailyForm">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
@@ -257,7 +257,7 @@
         {{ code }} — 매도 {{ sell_qty_pct }}% ({{ "{:,}".format(sell_qty) }}주) /
         매수 {{ buy_qty_pct }}% ({{ "{:,}".format(buy_qty) }}주) /
         시작 {{ "{:,}".format(init_shares|int) }}주
-        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분)
+        ({{ start_date }} ~ {{ end_date }}, {{ applied_period }}일)
       </h2>
       {% if allow_negative_cash or sell_above_start_asset_only %}
       <div class="option-badges">

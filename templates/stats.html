@@ -170,7 +170,7 @@
     <b>정수(1%p)</b> 단위로 반올림해 집계합니다.
   </p>
 
-  {% if files %}
+  {% if codes %}
   <form method="get" action="/stats" id="statsForm">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
@@ -208,7 +208,7 @@
 
     <div class="card">
       <h2>
-        {{ code }} — {{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분
+        {{ code }} — {{ start_date }} ~ {{ end_date }}, {{ applied_period }}일
         ({{ result.총일수 }}거래일 기준)
       </h2>
       <div class="summary-grid">

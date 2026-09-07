@@ -16,7 +16,8 @@ from urllib.parse import urlencode
 import pandas as pd
 from flask import Flask, render_template, request, Response
 from core import (
-    get_stock_data, get_stock_name, grid_trade_strategy, resolve_trade_qty,
+    get_stock_data, get_stock_data_range, get_stock_name, grid_trade_strategy, resolve_trade_qty,
+    trend_trade_strategy, compute_trend_heatmap,
     daily_reversal_strategy, compute_daily_heatmap,
     daily_gap_strategy, compute_daily_gap_heatmap,
     daily_reference_strategy, compute_daily_reference_heatmap_2d,
@@ -30,9 +31,11 @@ app = Flask(__name__)
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
-_CSV_NAME_RE = re.compile(r"^(\d+)_(\d{8})\.csv$")
-_LEGACY_CSV_NAME_RE = re.compile(r"^(\d+)_(\d+)days_(\d{8})\.csv$")
-DEFAULT_FETCH_DAYS = 30  # 로컬에 아무 데이터도 없고 기간도 지정되지 않았을 때 기본 조회량
+_CODE_CSV_RE = re.compile(r"^(\d+)\.csv$")  # 새 파일명 규칙: 종목당 파일 하나
+_LEGACY_DAILY_CSV_RE = re.compile(r"^(\d+)_(\d{8})\.csv$")  # 예전 규칙: 종목_생성일자.csv (마이그레이션 전용)
+_LEGACY_CSV_NAME_RE = re.compile(r"^(\d+)_(\d+)days_(\d{8})\.csv$")  # 그 이전 규칙 (마이그레이션 전용)
+MAX_RETENTION_DAYS = 730  # 로컬 캐시 최대 보관 기간 (2년) — 이보다 오래된 데이터는 저장 시 잘라냄
+DEFAULT_PERIOD_DAYS = 30  # 종료일만 있고 시작일/기간이 둘 다 없을 때 기본 조회 기간
 
 
 def _first_page_url(code: str) -> str:
@@ -40,45 +43,38 @@ def _first_page_url(code: str) -> str:
     return f"{SISE_DAY_URL}?{urlencode({'code': code, 'page': 1})}"
 
 
-def _local_csv_path(code: str, created: str = None) -> str:
-    created = created or datetime.now().strftime("%Y%m%d")
-    return os.path.join(DATA_DIR, f"{code}_{created}.csv")
+def _local_csv_path(code: str) -> str:
+    return os.path.join(DATA_DIR, f"{code}.csv")
+
+
+def _read_local_csv(code: str):
+    """종목당 파일 하나(data/{code}.csv)를 읽어 반환한다. 없거나 읽을 수 없으면 None."""
+    path = _local_csv_path(code)
+    if not os.path.isfile(path):
+        return None
+    try:
+        return pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+    except Exception:
+        return None
 
 
 def _save_local_csv(df: pd.DataFrame, code: str) -> str:
-    """조회한 데이터를 data/ 폴더에 (조회 당일 날짜를 붙여) 저장해, 이후 백테스트/히트맵
-    페이지에서 재사용할 수 있게 한다. 파일 하나가 그 종목을 그 날 조회한 가장 큰 범위를
-    담는다 - 이후 더 긴 기간이 필요하면 이 파일을 덮어써서 범위를 넓힌다."""
+    """종목당 파일 하나(data/{code}.csv)에 저장한다. MAX_RETENTION_DAYS(2년)보다 오래된
+    행은 잘라내고, 날짜 기준 중복을 제거한 뒤 내림차순으로 정렬해서 쓴다."""
+    cutoff = datetime.now() - timedelta(days=MAX_RETENTION_DAYS)
+    trimmed = df[df["날짜"] >= cutoff].drop_duplicates(subset="날짜")
+    trimmed = trimmed.sort_values("날짜", ascending=False).reset_index(drop=True)
     path = _local_csv_path(code)
-    df.to_csv(path, index=False, encoding="utf-8-sig")
+    trimmed.to_csv(path, index=False, encoding="utf-8-sig")
     return path
 
 
-def _csv_span_days(path: str, created: str) -> int:
-    """CSV가 실제로 커버하는 기간(created 기준, 가장 오래된 날짜까지의 캘린더 일수).
-    주말/공휴일 때문에 원래 요청했던 숫자보다 작게 나올 수 있지만, 파일 내용과 항상
-    정확히 일치하는 값이라 '기간' 입력의 기본값/최대범위 표시에 이 값을 그대로 쓴다."""
-    try:
-        dates = pd.read_csv(path, encoding="utf-8-sig", usecols=["날짜"], parse_dates=["날짜"])["날짜"]
-    except Exception:
-        return 0
-    if dates.empty:
-        return 0
-    created_dt = datetime.strptime(created, "%Y%m%d")
-    return max((created_dt - dates.min()).days, 0)
-
-
-def _slice_by_period(df: pd.DataFrame, created: str, period: int, date_col: str = "날짜") -> pd.DataFrame:
-    """core.get_stock_data()의 cutoff 로직과 동일하게, created 기준 period일 전까지 자른다."""
-    cutoff = datetime.strptime(created, "%Y%m%d") - timedelta(days=period)
-    return df[df[date_col] >= cutoff].reset_index(drop=True)
-
-
 def _migrate_legacy_csvs() -> None:
-    """예전 파일명 규칙(`{code}_{days}days_{created}.csv`)으로 저장된 파일들을 새 규칙
-    (`{code}_{created}.csv`)으로 1회 통합한다. 같은 (code, created) 중 days가 가장 큰
-    파일만 남기고(그날 조회한 최대범위이므로 나머지의 상위집합) 새 이름으로 바꾸고 나머지는
-    지운다. 모듈 로드 시 한 번 실행되며, 이미 정리된 상태에서 다시 실행해도 아무 일도
+    """예전 파일명 규칙(`{code}_{days}days_{created}.csv`)으로 저장된 파일들을, 한 단계
+    최신인 규칙(`{code}_{생성일자}.csv`)으로 1회 통합한다. 같은 (code, created) 중 days가
+    가장 큰 파일만 남기고(그날 조회한 최대범위이므로 나머지의 상위집합) 새 이름으로 바꾸고
+    나머지는 지운다. `_migrate_per_day_csvs()`가 이어서 그 결과를 종목당 파일 하나로 다시
+    통합한다. 모듈 로드 시 한 번 실행되며, 이미 정리된 상태에서 다시 실행해도 아무 일도
     일어나지 않는다(Flask 개발 서버의 리로더 자식 프로세스가 모듈을 다시 임포트해도 안전)."""
     groups = {}
     for fname in os.listdir(DATA_DIR):
@@ -89,7 +85,7 @@ def _migrate_legacy_csvs() -> None:
         groups.setdefault((code, created), []).append((days, fname))
 
     for (code, created), items in groups.items():
-        new_path = _local_csv_path(code, created)
+        new_path = os.path.join(DATA_DIR, f"{code}_{created}.csv")
         items.sort(key=lambda t: t[0], reverse=True)  # days 내림차순 -> [0]이 최대범위
         _, largest_fname = items[0]
         largest_path = os.path.join(DATA_DIR, largest_fname)
@@ -110,109 +106,160 @@ def _migrate_legacy_csvs() -> None:
                 pass
 
 
-_migrate_legacy_csvs()
-
-
-def _load_or_fetch_df(code: str, days_int: int) -> tuple[pd.DataFrame, bool]:
-    """오늘 이미 저장된 파일이 요청 기간을 커버하면 네이버를 다시 부르지 않고 슬라이스해서
-    재사용하고, 아니면(파일이 없거나 더 긴 과거가 필요하면) 새로 가져와 저장한다(그 종목의
-    오늘자 파일을 더 큰 범위로 덮어씀). (표시용으로 잘라낸 df, 캐시를 썼는지 여부) 반환."""
-    created = datetime.now().strftime("%Y%m%d")
-    path = _local_csv_path(code, created)
-    if os.path.isfile(path):
-        cached = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
-        if not cached.empty and cached["날짜"].min() <= datetime.now() - timedelta(days=days_int):
-            return _slice_by_period(cached, created, days_int), True
-
-    df = get_stock_data(code, days_int)
-    if not df.empty:
-        _save_local_csv(df, code)
-    return df, False
-
-
-def _ensure_local_csv(code: str, created: str, period: int = None) -> tuple[str, str, str]:
-    """(code, created)에 해당하는 로컬 CSV가 있는지 확인하고, 없거나 요청한 period보다
-    커버리지가 부족하면 네이버에서 가져와 채운다. (path, 실제 created, 안내 메시지) 반환.
-    path가 None이면 안내 메시지는 에러 메시지다."""
-    today = datetime.now().strftime("%Y%m%d")
-    path = _local_csv_path(code, created)
-
-    if os.path.isfile(path):
-        if period:
-            max_days = _csv_span_days(path, created)
-            if period > max_days:
-                if created == today:
-                    df = get_stock_data(code, period)
-                    if not df.empty:
-                        _save_local_csv(df, code)
-                else:
-                    created_display = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-                    return path, created, f"{created_display} 데이터는 최대 {max_days}일치만 있어 그만큼만 사용합니다."
-        return path, created, None
-
-    fetch_days = period or DEFAULT_FETCH_DAYS
-    df = get_stock_data(code, fetch_days)
-    if df.empty:
-        return None, created, "데이터를 가져올 수 없습니다. 종목 코드를 확인해주세요."
-    _save_local_csv(df, code)
-    note = None
-    if created != today:
-        created_display = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        note = f"요청하신 생성일자({created_display}) 데이터가 없어 오늘 기준 최신 데이터로 대체했습니다."
-    return _local_csv_path(code, today), today, note
-
-
-def _list_local_csvs():
-    """
-    data/ 폴더에 저장된 CSV 목록을 (종목코드, 생성일자) 단위로 반환. 파일 하나가 그 종목을
-    그 날 조회한 최대 범위를 담으므로, code+created 조합마다 파일이 정확히 하나다.
-    """
-    files = []
-    for fname in sorted(os.listdir(DATA_DIR)):
-        m = _CSV_NAME_RE.match(fname)
-        if m:
-            code, created = m.group(1), m.group(2)
-            path = os.path.join(DATA_DIR, fname)
-            files.append({
-                "filename": fname,
-                "code": code,
-                "created": created,
-                "created_display": f"{created[:4]}-{created[4:6]}-{created[6:]}",
-                "max_days": _csv_span_days(path, created),
-                "group_key": code,
-            })
-    # 최신 생성일자가 먼저 오도록 정렬
-    files.sort(key=lambda f: (f["group_key"], f["created"]), reverse=True)
-    return files
-
-
-def _grouped_local_csvs(files):
-    """
-    _list_local_csvs() 결과를 종목코드 단위로 묶는다.
-    프론트에서 '종목 선택 -> 생성일자 선택' 2단계 드롭다운을 만들 때 사용.
-    각 그룹 안의 항목은 생성일자가 최신인 것이 먼저 오도록 정렬한다.
-    """
+def _migrate_per_day_csvs() -> None:
+    """예전 규칙(`{code}_{생성일자}.csv`, 하루 단위 스냅샷)으로 저장된 파일들을 종목당 파일
+    하나(`{code}.csv`)로 1회 통합한다. 같은 종목의 스냅샷들을 모두 합쳐 날짜 기준 중복을
+    제거하고(겹치는 날짜는 어느 스냅샷 것이든 값이 같다 — 실제 시세는 조회 시점과 무관)
+    _save_local_csv()로 저장(2년 트림 포함)한 뒤 원본 스냅샷 파일은 지운다. 모듈 로드 시
+    `_migrate_legacy_csvs()` 다음에 한 번 실행된다."""
     groups = {}
-    order = []
-    for f in files:
-        key = f["code"]
-        if key not in groups:
-            groups[key] = {"code": f["code"], "items": []}
-            order.append(key)
-        groups[key]["items"].append({
-            "filename": f["filename"], "created": f["created"],
-            "created_display": f["created_display"], "max_days": f["max_days"],
+    for fname in os.listdir(DATA_DIR):
+        m = _LEGACY_DAILY_CSV_RE.match(fname)
+        if not m:
+            continue
+        groups.setdefault(m.group(1), []).append(fname)
+
+    for code, fnames in groups.items():
+        frames = []
+        for fname in fnames:
+            try:
+                frames.append(pd.read_csv(os.path.join(DATA_DIR, fname), encoding="utf-8-sig", parse_dates=["날짜"]))
+            except Exception:
+                continue
+        existing = _read_local_csv(code)
+        if existing is not None and not existing.empty:
+            frames.append(existing)
+        if frames:
+            _save_local_csv(pd.concat(frames, ignore_index=True), code)
+
+        for fname in fnames:
+            try:
+                os.remove(os.path.join(DATA_DIR, fname))
+            except FileNotFoundError:
+                pass
+
+
+_migrate_legacy_csvs()
+_migrate_per_day_csvs()
+
+
+def _resolve_query_range(end_date_str: str, start_date_str: str, period_str: str) -> tuple:
+    """
+    종료일(없으면 오늘) + (시작일 또는 기간 중 하나, 둘 다 없으면 DEFAULT_PERIOD_DAYS)로
+    [start_date, end_date] 범위와 적용된 기간(일)을 계산한다. **시작일이 주어지면 그것을
+    우선**해 기간을 역산하고, 아니면 기간(또는 기본값)으로 시작일을 역산한다.
+    """
+    end_date = datetime.strptime(end_date_str, "%Y-%m-%d") if end_date_str else datetime.now()
+    end_date = min(end_date, datetime.now())  # 미래 날짜는 오늘로 clamp
+
+    if start_date_str:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+        if start_date > end_date:
+            raise ValueError("시작일은 종료일보다 늦을 수 없습니다.")
+        period = (end_date - start_date).days
+    else:
+        period = int(period_str) if period_str else DEFAULT_PERIOD_DAYS
+        if period <= 0:
+            raise ValueError("기간은 1 이상이어야 합니다.")
+        start_date = end_date - timedelta(days=period)
+
+    return start_date, end_date, period
+
+
+def _default_display_range(end_date_str: str, start_date_str: str, period_str: str) -> tuple:
+    """
+    폼에 채워 보여줄 종료일/시작일/기간 **표시용** 기본값을 계산한다: 종료일이 비어 있으면
+    오늘로, 시작일이 비어 있으면(기간 또는 기본값 DEFAULT_PERIOD_DAYS로 역산해) 채운다.
+    시작일이 이미 있으면 기간은 건드리지 않는다(시작일이 우선이라 기간은 무시되므로,
+    괜히 30을 채워 헷갈리게 하지 않음). 실제 유효성 검사·범위 계산은 _resolve_query_range()
+    가 담당하므로, 여기서는 값이 이상해도 예외를 던지지 않고 원래 문자열을 그대로 둔다.
+    """
+    end_date_str = end_date_str or datetime.now().strftime("%Y-%m-%d")
+    if not start_date_str:
+        period_str = period_str or str(DEFAULT_PERIOD_DAYS)
+        try:
+            end_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
+            start_date_str = (end_dt - timedelta(days=int(period_str))).strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            pass
+    return end_date_str, start_date_str, period_str
+
+
+def _ensure_range_df(code: str, start_date: datetime, end_date: datetime) -> tuple:
+    """
+    종목당 파일 하나(data/{code}.csv)를 기준으로 [start_date, end_date] 범위 데이터를
+    반환한다. 캐시가 없으면 그 범위를 통째로 받아 저장하고, 있으면 부족한 구간(최신 쪽/과거
+    쪽, 필요하면 둘 다)만 추가로 받아 병합한다 — 네이버 시세는 조회 시점과 무관하게 같은
+    과거 날짜는 항상 같은 값이라, 캐시에 이미 있는 구간은 다시 받을 필요가 없다. start_date
+    가 MAX_RETENTION_DAYS(2년)보다 과거면 그만큼만 받고 안내 메시지를 반환한다.
+
+    Returns
+    -------
+    (요청 범위로 슬라이스된 df, 안내 메시지 or None, 네이버를 한 번도 부르지 않았는지,
+     실제 적용된 start_date — 2년 clamp가 적용됐으면 그 조정된 값)
+    """
+    note = None
+    oldest_allowed = datetime.now() - timedelta(days=MAX_RETENTION_DAYS)
+    if start_date < oldest_allowed:
+        note = (
+            f"최대 보관 기간(2년)을 넘는 과거 데이터는 제공하지 않아 "
+            f"{oldest_allowed.strftime('%Y-%m-%d')}부터로 조정했습니다."
+        )
+        start_date = oldest_allowed
+
+    cached = _read_local_csv(code)
+    used_cache_only = cached is not None and not cached.empty
+    fetched = []
+
+    if cached is None or cached.empty:
+        fetched.append(get_stock_data_range(code, start_date, end_date))
+        used_cache_only = False
+    else:
+        cached_max = cached["날짜"].max()
+        cached_min = cached["날짜"].min()
+        if end_date > cached_max:
+            fetched.append(get_stock_data_range(code, cached_max + timedelta(days=1), end_date))
+            used_cache_only = False
+        if start_date < cached_min:
+            fetched.append(get_stock_data_range(code, start_date, cached_min - timedelta(days=1)))
+            used_cache_only = False
+
+    frames = [f for f in ([cached] if cached is not None else []) + fetched if f is not None and not f.empty]
+    if not frames:
+        return pd.DataFrame(), note, used_cache_only, start_date
+
+    merged = pd.concat(frames, ignore_index=True).drop_duplicates(subset="날짜") if len(frames) > 1 else frames[0]
+    if fetched:
+        _save_local_csv(merged, code)
+
+    sliced = merged[(merged["날짜"] >= start_date) & (merged["날짜"] <= end_date)]
+    sliced = sliced.sort_values("날짜", ascending=False).reset_index(drop=True)
+    return sliced, note, used_cache_only, start_date
+
+
+def _list_local_codes():
+    """data/ 폴더에 종목당 파일 하나로 저장된 로컬 데이터 목록을 반환한다 (선택 드롭다운용)."""
+    codes = []
+    for fname in sorted(os.listdir(DATA_DIR)):
+        m = _CODE_CSV_RE.match(fname)
+        if not m:
+            continue
+        code = m.group(1)
+        path = os.path.join(DATA_DIR, fname)
+        try:
+            dates = pd.read_csv(path, encoding="utf-8-sig", usecols=["날짜"], parse_dates=["날짜"])["날짜"]
+        except Exception:
+            continue
+        if dates.empty:
+            continue
+        codes.append({
+            "code": code,
+            "min_date": dates.min().strftime("%Y-%m-%d"),
+            "max_date": dates.max().strftime("%Y-%m-%d"),
+            "max_days": (dates.max() - dates.min()).days,
         })
-    for g in groups.values():
-        g["items"].sort(key=lambda item: item["created"], reverse=True)
-    return [groups[k] for k in order]
-
-
-def _most_recent_file(files):
-    """가장 최근에 생성된 로컬 CSV의 파일명을 반환한다 (없으면 빈 문자열)."""
-    if not files:
-        return ""
-    return max(files, key=lambda f: f["created"])["filename"]
+    codes.sort(key=lambda c: c["code"])
+    return codes
 
 
 def _profit_color(value: float, vmax: float) -> str:
@@ -236,20 +283,22 @@ def _profit_color(value: float, vmax: float) -> str:
 
 
 def _build_backtest_link(
-    selected_file, gap, qty_pct, init_shares, no_sell, no_buy, allow_negative_cash,
-    profit_gap=None, profit_recover=None, capital=None, period=None,
+    code, gap, qty_pct, init_shares, no_sell, no_buy, allow_negative_cash,
+    profit_gap=None, profit_recover=None, capital=None, end_date=None, period=None,
 ):
     """
     히트맵/히트맵2 셀·요약 클릭 시 그 조건 그대로 백테스트 페이지로 이동하는 링크를 만든다.
     profit_gap/profit_recover를 함께 넘기면(히트맵2용) "이익 회수 사용"을 켠 상태로 연결한다.
     """
     params = {
-        "file": selected_file,
+        "code": code,
         "sell_gap": gap,
         "buy_gap": gap,
         "qty_pct": qty_pct,
         "init_shares": init_shares,
     }
+    if end_date is not None:
+        params["end_date"] = end_date
     if period is not None:
         params["period"] = period
     if no_sell:
@@ -268,12 +317,12 @@ def _build_backtest_link(
 
 
 def _build_daily_link(
-    selected_file, sell_qty_pct, buy_qty_pct, init_shares,
-    allow_negative_cash, sell_above_start_asset_only, period=None,
+    code, sell_qty_pct, buy_qty_pct, init_shares,
+    allow_negative_cash, sell_above_start_asset_only, end_date=None, period=None,
 ):
     """히트맵4 셀·요약 클릭 시 그 조건 그대로 /daily 페이지로 이동하는 링크를 만든다."""
     params = {
-        "file": selected_file,
+        "code": code,
         "sell_qty_pct": sell_qty_pct,
         "buy_qty_pct": buy_qty_pct,
         "init_shares": init_shares,
@@ -281,6 +330,8 @@ def _build_daily_link(
         # 여기서 넘긴 sell_above_start_asset_only 값을 그대로 쓰게 한다.
         "submitted": "1",
     }
+    if end_date is not None:
+        params["end_date"] = end_date
     if period is not None:
         params["period"] = period
     if allow_negative_cash:
@@ -290,14 +341,40 @@ def _build_daily_link(
     return f"/daily?{urlencode(params)}"
 
 
-def _build_daily2_link(selected_file, gap_pct, qty_pct, init_shares, no_sell=False, no_buy=False, period=None):
+def _build_trend_link(
+    code, sell_qty_pct, buy_qty_pct, init_shares,
+    no_sell=False, no_buy=False, allow_negative_cash=False, end_date=None, period=None,
+):
+    """히트맵8 셀·요약 클릭 시 그 조건 그대로 /trend 페이지로 이동하는 링크를 만든다."""
+    params = {
+        "code": code,
+        "sell_qty_pct": sell_qty_pct,
+        "buy_qty_pct": buy_qty_pct,
+        "init_shares": init_shares,
+    }
+    if end_date is not None:
+        params["end_date"] = end_date
+    if period is not None:
+        params["period"] = period
+    if no_sell:
+        params["no_sell"] = "on"
+    if no_buy:
+        params["no_buy"] = "on"
+    if allow_negative_cash:
+        params["allow_negative_cash"] = "on"
+    return f"/trend?{urlencode(params)}"
+
+
+def _build_daily2_link(code, gap_pct, qty_pct, init_shares, no_sell=False, no_buy=False, end_date=None, period=None):
     """히트맵5 셀·요약 클릭 시 그 조건 그대로 /daily2 페이지로 이동하는 링크를 만든다."""
     params = {
-        "file": selected_file,
+        "code": code,
         "gap_pct": gap_pct,
         "qty_pct": qty_pct,
         "init_shares": init_shares,
     }
+    if end_date is not None:
+        params["end_date"] = end_date
     if period is not None:
         params["period"] = period
     if no_sell:
@@ -308,17 +385,19 @@ def _build_daily2_link(selected_file, gap_pct, qty_pct, init_shares, no_sell=Fal
 
 
 def _build_daily3_link(
-    selected_file, up_gap_pct, down_gap_pct, qty_pct, init_shares,
-    allow_negative_cash=False, no_sell=False, no_buy=False, period=None,
+    code, up_gap_pct, down_gap_pct, qty_pct, init_shares,
+    allow_negative_cash=False, no_sell=False, no_buy=False, end_date=None, period=None,
 ):
     """히트맵6 셀·요약 클릭 시 그 조건 그대로 /daily3 페이지로 이동하는 링크를 만든다."""
     params = {
-        "file": selected_file,
+        "code": code,
         "up_gap_pct": up_gap_pct,
         "down_gap_pct": down_gap_pct,
         "qty_pct": qty_pct,
         "init_shares": init_shares,
     }
+    if end_date is not None:
+        params["end_date"] = end_date
     if period is not None:
         params["period"] = period
     if allow_negative_cash:
@@ -331,18 +410,20 @@ def _build_daily3_link(
 
 
 def _build_recovery_link(
-    selected_file, buy_trigger_pct, buy_recover_pct, init_shares,
-    base_price=None, allow_negative_cash=False, period=None,
+    code, buy_trigger_pct, buy_recover_pct, init_shares,
+    base_price=None, allow_negative_cash=False, end_date=None, period=None,
 ):
     """히트맵7 셀·요약 클릭 시 그 조건 그대로 /recovery 페이지로 이동하는 링크를 만든다."""
     params = {
-        "file": selected_file,
+        "code": code,
         "buy_trigger_pct": buy_trigger_pct,
         "buy_recover_pct": buy_recover_pct,
         "init_shares": init_shares,
     }
     if base_price is not None:
         params["base_price"] = base_price
+    if end_date is not None:
+        params["end_date"] = end_date
     if period is not None:
         params["period"] = period
     if allow_negative_cash:
@@ -352,13 +433,19 @@ def _build_recovery_link(
 
 @app.route("/", methods=["GET"])
 def index():
-    code = request.args.get("code", "").strip()
-    days = request.args.get("days", "30").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
 
     context = {
         "active": "index",
         "code": code,
-        "days": days,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
+        "applied_period": None,
         "error": None,
         "table": None,
         "name": None,
@@ -370,9 +457,7 @@ def index():
 
     if code:
         try:
-            days_int = int(days)
-            if days_int <= 0:
-                raise ValueError("기간은 1 이상의 숫자여야 합니다.")
+            start_date, end_date, _ = _resolve_query_range(end_date_str, start_date_str, period_str)
 
             context["source_url"] = _first_page_url(code)
 
@@ -381,11 +466,16 @@ def index():
             except Exception:
                 context["name"] = None
 
-            df, from_cache = _load_or_fetch_df(code, days_int)
-            context["from_cache"] = from_cache
+            df, fetch_note, used_cache_only, start_date = _ensure_range_df(code, start_date, end_date)
+            context["from_cache"] = used_cache_only
+            context["fetch_note"] = fetch_note
+            context["end_date"] = end_date.strftime("%Y-%m-%d")
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
 
             if df.empty:
-                context["error"] = "데이터가 없습니다. 종목 코드를 확인해주세요."
+                context["error"] = fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요."
             else:
                 display_df = df.copy()
                 display_df["날짜"] = display_df["날짜"].dt.strftime("%Y-%m-%d")
@@ -405,21 +495,23 @@ def index():
 
 @app.route("/download.csv")
 def download_csv():
-    """화면에 표시된 것과 동일한 조건(code, days)으로 다시 조회해 CSV로 내려준다."""
+    """화면에 표시된 것과 동일한 조건(code, end_date, start_date/period)으로 다시 조회해
+    CSV로 내려준다."""
     code = request.args.get("code", "").strip()
-    days = request.args.get("days", "30").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
 
     if not code:
         return "code 파라미터가 필요합니다.", 400
 
     try:
-        days_int = int(days)
-        if days_int <= 0:
-            raise ValueError("기간은 1 이상의 숫자여야 합니다.")
+        start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
     except ValueError as e:
         return f"입력 오류: {e}", 400
 
-    df, _ = _load_or_fetch_df(code, days_int)
+    df, _, _, start_date = _ensure_range_df(code, start_date, end_date)
     if df.empty:
         return "데이터가 없습니다. 종목 코드를 확인해주세요.", 400
 
@@ -427,12 +519,158 @@ def download_csv():
     df.to_csv(buf, index=False, encoding="utf-8-sig")
     buf.seek(0)
 
-    filename = f"{code}_{days_int}days_{datetime.now().strftime('%Y%m%d')}.csv"
+    filename = f"{code}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv"
     return Response(
         buf.getvalue(),
         mimetype="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@app.route("/trend", methods=["GET"])
+def trend():
+    """
+    "추세 매매" 백테스트 페이지. grid_trade_strategy()에서 트레일링 고점/저점(max/min)과
+    매도gap/매수gap 조건만 뺀 가장 단순한 형태 — 오직 전날 종가 대비 오늘 종가만 보고,
+    전날보다 내리면 매도, 오르면 매수한다(하락에 함께 팔고 상승에 함께 사는 추세추종
+    방식). 매도/매수 안 함, 현금 부족해도 매수 옵션은 그리드 매매와 동일하게 유지한다.
+    """
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
+
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
+    sell_qty_pct = request.args.get("sell_qty_pct", "10").strip()
+    buy_qty_pct = request.args.get("buy_qty_pct", "10").strip()
+    init_shares = request.args.get("init_shares", "100").strip()
+    no_sell = request.args.get("no_sell") == "on"
+    no_buy = request.args.get("no_buy") == "on"
+    allow_negative_cash = request.args.get("allow_negative_cash") == "on"
+
+    context = {
+        "active": "trend",
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
+        "sell_qty_pct": sell_qty_pct,
+        "buy_qty_pct": buy_qty_pct,
+        "init_shares": init_shares,
+        "no_sell": no_sell,
+        "no_buy": no_buy,
+        "allow_negative_cash": allow_negative_cash,
+        "error": None,
+        "summary": None,
+        "trade_log": None,
+        "sell_qty": None,
+        "buy_qty": None,
+        "initial_asset": None,
+        "hold_only_asset": None,
+        "vs_hold": None,
+        "profit": None,
+        "profit_pct": None,
+        "applied_period": None,
+        "fetch_note": None,
+        "chart_labels": None,
+        "chart_prices": None,
+        "chart_sell_points": None,
+        "chart_buy_points": None,
+        "chart_total": None,
+        "chart_stock_value": None,
+        "chart_cash": None,
+        "chart_hold_only": None,
+    }
+
+    if code:
+        try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
+            sell_qty_pct_f = float(sell_qty_pct)
+            buy_qty_pct_f = float(buy_qty_pct)
+            init_i = int(init_shares)
+            if sell_qty_pct_f <= 0:
+                raise ValueError("매도 수량(%)은 0보다 커야 합니다.")
+            if buy_qty_pct_f <= 0:
+                raise ValueError("매수 수량(%)은 0보다 커야 합니다.")
+            if init_i < 0:
+                raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
+            if df.empty:
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            context["end_date"] = end_date.strftime("%Y-%m-%d")
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
+
+            sell_qty_i = resolve_trade_qty(init_i, sell_qty_pct_f)
+            buy_qty_i = resolve_trade_qty(init_i, buy_qty_pct_f)
+            context["sell_qty"] = sell_qty_i
+            context["buy_qty"] = buy_qty_i
+
+            result = trend_trade_strategy(
+                df, sell_qty=sell_qty_i, buy_qty=buy_qty_i, initial_shares=init_i,
+                no_sell=no_sell, no_buy=no_buy, allow_negative_cash=allow_negative_cash,
+            )
+
+            trade_log = result.pop("매매일지")
+            for row in trade_log:
+                row["날짜"] = pd.Timestamp(row["날짜"]).strftime("%Y-%m-%d")
+
+            asset_log = result.pop("자산추이")
+
+            sorted_df = df.sort_values("날짜")
+            chart_labels = sorted_df["날짜"].dt.strftime("%Y-%m-%d").tolist()
+            chart_prices = sorted_df["종가"].tolist()
+            chart_sell_points = [
+                {"x": row["날짜"], "y": row["가격"]} for row in trade_log if row["구분"] == "매도"
+            ]
+            chart_buy_points = [
+                {"x": row["날짜"], "y": row["가격"]} for row in trade_log if row["구분"] == "매수"
+            ]
+            chart_total = [row["total"] for row in asset_log]
+            chart_stock_value = [row["주식평가금액"] for row in asset_log]
+            chart_cash = [row["현금"] for row in asset_log]
+            chart_hold_only = [row["주가"] * init_i for row in asset_log]
+
+            first_price = float(df.sort_values("날짜")["종가"].iloc[0])
+            initial_asset = init_i * first_price
+
+            hold_only_asset = init_i * result["주가"]
+
+            profit = result["total"] - initial_asset
+            profit_pct = (profit / initial_asset * 100) if initial_asset else 0.0
+
+            vs_hold = result["total"] - hold_only_asset
+
+            context["summary"] = result
+            context["initial_asset"] = initial_asset
+            context["hold_only_asset"] = hold_only_asset
+            context["vs_hold"] = vs_hold
+            context["profit"] = profit
+            context["profit_pct"] = profit_pct
+            context["trade_log"] = trade_log
+            context["chart_labels"] = chart_labels
+            context["chart_prices"] = chart_prices
+            context["chart_sell_points"] = chart_sell_points
+            context["chart_buy_points"] = chart_buy_points
+            context["chart_total"] = chart_total
+            context["chart_stock_value"] = chart_stock_value
+            context["chart_cash"] = chart_cash
+            context["chart_hold_only"] = chart_hold_only
+
+        except ValueError as e:
+            context["error"] = f"입력 오류: {e}"
+        except Exception as e:
+            context["error"] = f"백테스트 계산 중 오류가 발생했습니다: {e}"
+
+    return render_template("trend.html", **context)
 
 
 @app.route("/backtest", methods=["GET"])
@@ -445,12 +683,14 @@ def backtest():
     마련한 뒤 별도 적립금으로 옮긴다 (이후 매매에 쓰이지 않음). 자본금은 고정값이라 별도로
     갱신되지 않는다.
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     sell_gap = request.args.get("sell_gap", "10").strip()
     buy_gap = request.args.get("buy_gap", "").strip()  # 비워두면 sell_gap과 동일하게 처리
     qty_pct = request.args.get("qty_pct", "10").strip()
@@ -465,11 +705,12 @@ def backtest():
 
     context = {
         "active": "backtest",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "sell_gap": sell_gap,
         "buy_gap": buy_gap,
         "qty_pct": qty_pct,
@@ -491,10 +732,6 @@ def backtest():
         "vs_hold": None,
         "profit": None,
         "profit_pct": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "effective_buy_gap": None,
@@ -509,27 +746,10 @@ def backtest():
         "chart_reserve": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("backtest.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("backtest.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             sell_gap_f = float(sell_gap)
             buy_gap_f = float(buy_gap) if buy_gap else None
             qty_pct_f = float(qty_pct)
@@ -557,17 +777,14 @@ def backtest():
                 if capital_f is not None and capital_f <= 0:
                     raise ValueError("자본금은 0보다 커야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            context["end_date"] = end_date.strftime("%Y-%m-%d")
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             # 매수/매도 수량은 시작 보유 주식수 대비 비율(%)로 입력받아, 시작 시점에 한 번만
             # 절대 수량으로 변환한다 (보유 주식수가 커져도 매번 큰 절대 수량을 입력할 필요 없음).
@@ -668,12 +885,14 @@ def daily():
     "시작 자산보다 높을 때만 팔기" 체크 시 전날보다 올랐어도 그 시점 평가자산이 시작 자산을
     회복하지 못한 상태면 매도하지 않는다.
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     sell_qty_pct = request.args.get("sell_qty_pct", "10").strip()
     buy_qty_pct = request.args.get("buy_qty_pct", "10").strip()
     init_shares = request.args.get("init_shares", "100").strip()
@@ -689,11 +908,12 @@ def daily():
 
     context = {
         "active": "daily",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "sell_qty_pct": sell_qty_pct,
         "buy_qty_pct": buy_qty_pct,
         "init_shares": init_shares,
@@ -709,10 +929,6 @@ def daily():
         "vs_hold": None,
         "profit": None,
         "profit_pct": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "chart_labels": None,
@@ -725,27 +941,10 @@ def daily():
         "chart_hold_only": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("daily.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("daily.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             sell_qty_pct_f = float(sell_qty_pct)
             buy_qty_pct_f = float(buy_qty_pct)
             init_i = int(init_shares)
@@ -756,17 +955,14 @@ def daily():
             if init_i < 0:
                 raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            context["end_date"] = end_date.strftime("%Y-%m-%d")
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             sell_qty_i = resolve_trade_qty(init_i, sell_qty_pct_f)
             buy_qty_i = resolve_trade_qty(init_i, buy_qty_pct_f)
@@ -842,12 +1038,14 @@ def daily2():
     서로 뒤바뀐 구조). 매도/매수 수량은 하나의 값(시작 보유 주식수 대비 %)을 공유한다.
     변수는 gap%와 수량% 딱 2개뿐이다.
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     gap_pct = request.args.get("gap_pct", "3").strip()
     qty_pct = request.args.get("qty_pct", "10").strip()
     init_shares = request.args.get("init_shares", "100").strip()
@@ -856,11 +1054,12 @@ def daily2():
 
     context = {
         "active": "daily2",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "gap_pct": gap_pct,
         "qty_pct": qty_pct,
         "init_shares": init_shares,
@@ -875,10 +1074,6 @@ def daily2():
         "vs_hold": None,
         "profit": None,
         "profit_pct": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "chart_labels": None,
@@ -891,27 +1086,10 @@ def daily2():
         "chart_hold_only": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("daily2.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("daily2.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             gap_pct_f = float(gap_pct)
             qty_pct_f = float(qty_pct)
             init_i = int(init_shares)
@@ -922,17 +1100,14 @@ def daily2():
             if init_i < 0:
                 raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            context["end_date"] = end_date.strftime("%Y-%m-%d")
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             qty_i = resolve_trade_qty(init_i, qty_pct_f)
             context["qty"] = qty_i
@@ -1005,12 +1180,14 @@ def daily3():
     일별 매매2와 달리, 매매 없이는 절대 움직이지 않는다). down_gap을 비워두면 up_gap과
     동일하게 취급한다. 매도/매수 수량은 하나의 값(시작 보유 주식수 대비 %)을 공유한다.
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     up_gap_pct = request.args.get("up_gap_pct", "5").strip()
     down_gap_pct = request.args.get("down_gap_pct", "").strip()  # 비워두면 up_gap_pct와 동일
     qty_pct = request.args.get("qty_pct", "10").strip()
@@ -1021,11 +1198,12 @@ def daily3():
 
     context = {
         "active": "daily3",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "up_gap_pct": up_gap_pct,
         "down_gap_pct": down_gap_pct,
         "qty_pct": qty_pct,
@@ -1043,10 +1221,6 @@ def daily3():
         "vs_hold": None,
         "profit": None,
         "profit_pct": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "chart_labels": None,
@@ -1059,27 +1233,10 @@ def daily3():
         "chart_hold_only": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("daily3.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("daily3.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             up_gap_f = float(up_gap_pct)
             down_gap_f = float(down_gap_pct) if down_gap_pct else None
             qty_pct_f = float(qty_pct)
@@ -1093,17 +1250,14 @@ def daily3():
             if init_i < 0:
                 raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            context["end_date"] = end_date.strftime("%Y-%m-%d")
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             qty_i = resolve_trade_qty(init_i, qty_pct_f)
             context["qty"] = qty_i
@@ -1179,12 +1333,14 @@ def recovery():
     사서 채운다(자본금을 넘어서 사지는 않음). 기준가는 매매가 일어나도 갱신되지 않고 처음
     값 그대로 고정된다.
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     init_shares = request.args.get("init_shares", "100").strip()
     base_price = request.args.get("base_price", "").strip()  # 비우면 첫날 종가
     buy_trigger_pct = request.args.get("buy_trigger_pct", "10").strip()
@@ -1193,11 +1349,12 @@ def recovery():
 
     context = {
         "active": "recovery",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "init_shares": init_shares,
         "base_price": base_price,
         "buy_trigger_pct": buy_trigger_pct,
@@ -1213,10 +1370,6 @@ def recovery():
         "vs_hold": None,
         "profit": None,
         "profit_pct": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "chart_labels": None,
@@ -1230,27 +1383,10 @@ def recovery():
         "chart_capital": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("recovery.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("recovery.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             init_i = int(init_shares)
             base_price_f = float(base_price) if base_price else None
             buy_trigger_f = float(buy_trigger_pct)
@@ -1264,17 +1400,14 @@ def recovery():
             if buy_recover_f <= 0:
                 raise ValueError("매수 회복률은 0보다 커야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            context["end_date"] = end_date.strftime("%Y-%m-%d")
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             result = capital_recovery_strategy(
                 df, initial_shares=init_i, base_price=base_price_f,
@@ -1347,12 +1480,14 @@ def heatmap():
     gap 1~50%(1% 단위) x 매매수량(시작 보유 주식수 대비 %) 1~50%(1% 단위) = 2,500가지 조합의
     수익률을 계산해 히트맵으로 보여준다. 저장된 로컬 CSV만 사용 (네이버 재접속 없음).
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     init_shares = request.args.get("init_shares", "100").strip()
     capital = request.args.get("capital", "").strip()
     no_sell = request.args.get("no_sell") == "on"
@@ -1365,11 +1500,12 @@ def heatmap():
 
     context = {
         "active": "heatmap",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "init_shares": init_shares,
         "capital": capital,
         "no_sell": no_sell,
@@ -1380,10 +1516,6 @@ def heatmap():
         "qty_pct_min": qty_pct_min,
         "qty_pct_max": qty_pct_max,
         "error": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "gaps": None,
@@ -1404,27 +1536,10 @@ def heatmap():
         "recommended_qty_link": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("heatmap.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("heatmap.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = selected_file = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             init_i = int(init_shares)
             if init_i < 0:
                 raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
@@ -1444,17 +1559,15 @@ def heatmap():
             if qty_pct_max_i < qty_pct_min_i:
                 raise ValueError("수량 상한은 하한보다 크거나 같아야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            end_date_iso = end_date.strftime("%Y-%m-%d")
+            context["end_date"] = end_date_iso
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             gap_values = range(gap_min_i, gap_max_i + 1)  # 1% 단위
             qty_percent_values = range(qty_pct_min_i, qty_pct_max_i + 1)  # 시작 보유 주식수 대비 1% 단위
@@ -1477,7 +1590,7 @@ def heatmap():
                         "gap": g, "qty_pct": qp, "pct": pct,
                         "total": result["initial_asset"] * (1 + pct / 100),
                         "color": _profit_color(pct, vmax),
-                        "link": _build_backtest_link(selected_file, g, qp, init_i, no_sell, no_buy, allow_negative_cash, period=period_i),
+                        "link": _build_backtest_link(code, g, qp, init_i, no_sell, no_buy, allow_negative_cash, end_date=end_date_iso, period=applied_period),
                         "is_best": is_best,
                         "is_worst": is_worst,
                     })
@@ -1490,18 +1603,19 @@ def heatmap():
             context["initial_asset"] = result["initial_asset"]
             context["hold_only_asset"] = result["hold_only_asset"]
             context["best_link"] = _build_backtest_link(
-                selected_file, result["best"]["gap"], result["best"]["qty_pct"], init_i, no_sell, no_buy, allow_negative_cash, period=period_i
+                code, result["best"]["gap"], result["best"]["qty_pct"], init_i, no_sell, no_buy, allow_negative_cash, end_date=end_date_iso, period=applied_period
             )
             context["worst_link"] = _build_backtest_link(
-                selected_file, result["worst"]["gap"], result["worst"]["qty_pct"], init_i, no_sell, no_buy, allow_negative_cash, period=period_i
+                code, result["worst"]["gap"], result["worst"]["qty_pct"], init_i, no_sell, no_buy, allow_negative_cash, end_date=end_date_iso, period=applied_period
             )
 
             context["qty_stats"] = result["qty_stats"]
             context["recommended_qty"] = result["recommended_qty"]
             if result["recommended_qty"] is not None:
                 recover_params = {
-                    "file": selected_file,
-                    "period": period_i,
+                    "code": code,
+                    "end_date": end_date_iso,
+                    "period": applied_period,
                     "init_shares": init_i,
                     "qty_pct": result["recommended_qty"]["qty_pct"],
                 }
@@ -1519,7 +1633,7 @@ def heatmap():
                 return {
                     **combo,
                     "link": _build_backtest_link(
-                        selected_file, combo["gap"], combo["qty_pct"], init_i, no_sell, no_buy, allow_negative_cash, period=period_i
+                        code, combo["gap"], combo["qty_pct"], init_i, no_sell, no_buy, allow_negative_cash, end_date=end_date_iso, period=applied_period
                     ),
                 }
 
@@ -1543,12 +1657,14 @@ def heatmap2():
     거래 수량과 회수율은 폼에서 고정 숫자로 입력받는다 (스윕 대상이 아님).
     저장된 로컬 CSV만 사용 (네이버 재접속 없음).
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     init_shares = request.args.get("init_shares", "100").strip()
     no_sell = request.args.get("no_sell") == "on"
     no_buy = request.args.get("no_buy") == "on"
@@ -1563,11 +1679,12 @@ def heatmap2():
 
     context = {
         "active": "heatmap2",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "init_shares": init_shares,
         "no_sell": no_sell,
         "no_buy": no_buy,
@@ -1580,10 +1697,6 @@ def heatmap2():
         "profit_gap_min": profit_gap_min,
         "profit_gap_max": profit_gap_max,
         "error": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "gaps": None,
@@ -1603,27 +1716,10 @@ def heatmap2():
         "capital_used": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("heatmap2.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("heatmap2.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = selected_file = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             init_i = int(init_shares)
             if init_i < 0:
                 raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
@@ -1651,17 +1747,15 @@ def heatmap2():
             if profit_gap_max_i < profit_gap_min_i:
                 raise ValueError("이익 상한은 하한보다 크거나 같아야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            end_date_iso = end_date.strftime("%Y-%m-%d")
+            context["end_date"] = end_date_iso
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             gap_values = range(gap_min_i, gap_max_i + 1)  # 1% 단위
             profit_gap_values = range(profit_gap_min_i, profit_gap_max_i + 1)  # 1% 단위
@@ -1686,8 +1780,9 @@ def heatmap2():
                         "gap": g, "profit_gap": pg, "pct": pct,
                         "color": _profit_color(pct, vmax),
                         "link": _build_backtest_link(
-                            selected_file, g, qty_pct_f, init_i, no_sell, no_buy, allow_negative_cash,
-                            profit_gap=pg, profit_recover=profit_recover_f, capital=capital_f, period=period_i,
+                            code, g, qty_pct_f, init_i, no_sell, no_buy, allow_negative_cash,
+                            profit_gap=pg, profit_recover=profit_recover_f, capital=capital_f,
+                            end_date=end_date_iso, period=applied_period,
                         ),
                         "is_best": is_best,
                         "is_worst": is_worst,
@@ -1702,20 +1797,23 @@ def heatmap2():
             context["hold_only_asset"] = result["hold_only_asset"]
             context["capital_used"] = result["capital"]
             context["best_link"] = _build_backtest_link(
-                selected_file, result["best"]["gap"], qty_pct_f, init_i, no_sell, no_buy, allow_negative_cash,
-                profit_gap=result["best"]["profit_gap"], profit_recover=profit_recover_f, capital=capital_f, period=period_i,
+                code, result["best"]["gap"], qty_pct_f, init_i, no_sell, no_buy, allow_negative_cash,
+                profit_gap=result["best"]["profit_gap"], profit_recover=profit_recover_f, capital=capital_f,
+                end_date=end_date_iso, period=applied_period,
             )
             context["worst_link"] = _build_backtest_link(
-                selected_file, result["worst"]["gap"], qty_pct_f, init_i, no_sell, no_buy, allow_negative_cash,
-                profit_gap=result["worst"]["profit_gap"], profit_recover=profit_recover_f, capital=capital_f, period=period_i,
+                code, result["worst"]["gap"], qty_pct_f, init_i, no_sell, no_buy, allow_negative_cash,
+                profit_gap=result["worst"]["profit_gap"], profit_recover=profit_recover_f, capital=capital_f,
+                end_date=end_date_iso, period=applied_period,
             )
 
             def _with_link(combo):
                 return {
                     **combo,
                     "link": _build_backtest_link(
-                        selected_file, combo["gap"], qty_pct_f, init_i, no_sell, no_buy, allow_negative_cash,
-                        profit_gap=combo["profit_gap"], profit_recover=profit_recover_f, capital=capital_f, period=period_i,
+                        code, combo["gap"], qty_pct_f, init_i, no_sell, no_buy, allow_negative_cash,
+                        profit_gap=combo["profit_gap"], profit_recover=profit_recover_f, capital=capital_f,
+                        end_date=end_date_iso, period=applied_period,
                     ),
                 }
 
@@ -1740,12 +1838,14 @@ def heatmap3():
     (gap x 이익gap)를 일반화한 페이지 — 축으로 고르지 않은 나머지 두 피쳐는 고정값으로
     적용되며, 이익 회수 로직은 축 선택과 무관하게 항상 켜진 채로 계산된다.
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     init_shares = request.args.get("init_shares", "100").strip()
     capital = request.args.get("capital", "").strip()
     no_sell = request.args.get("no_sell") == "on"
@@ -1768,11 +1868,12 @@ def heatmap3():
 
     context = {
         "active": "heatmap3",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "init_shares": init_shares,
         "capital": capital,
         "no_sell": no_sell,
@@ -1783,10 +1884,6 @@ def heatmap3():
         "features": HEATMAP_FEATURES,
         "feature_inputs": feature_inputs,
         "error": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "x_label": None,
@@ -1806,27 +1903,10 @@ def heatmap3():
         "hold_only_asset": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("heatmap3.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("heatmap3.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = selected_file = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             if x_feature == y_feature:
                 raise ValueError("x축과 y축은 서로 다른 항목이어야 합니다.")
             if x_feature not in HEATMAP_FEATURES or y_feature not in HEATMAP_FEATURES:
@@ -1860,17 +1940,15 @@ def heatmap3():
                         raise ValueError("이익 회수율 고정값은 1~100 사이여야 합니다.")
                     fixed_values[feat] = val
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            end_date_iso = end_date.strftime("%Y-%m-%d")
+            context["end_date"] = end_date_iso
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             result = compute_profit_heatmap_2d(
                 df, x_feature, sweep_ranges[x_feature], y_feature, sweep_ranges[y_feature],
@@ -1889,9 +1967,10 @@ def heatmap3():
 
             def _link_for(params):
                 return _build_backtest_link(
-                    selected_file, params["gap"], params["qty_pct"], init_i, no_sell, no_buy,
+                    code, params["gap"], params["qty_pct"], init_i, no_sell, no_buy,
                     allow_negative_cash, profit_gap=params["profit_gap"],
-                    profit_recover=params["profit_recover"], capital=capital_f, period=period_i,
+                    profit_recover=params["profit_recover"], capital=capital_f,
+                    end_date=end_date_iso, period=applied_period,
                 )
 
             def _link_for_combo(combo):
@@ -1950,12 +2029,14 @@ def heatmap4():
     시작 보유 주식수 대비) = 2,500가지 조합의 수익률을 계산해 히트맵으로 보여준다.
     저장된 로컬 CSV만 사용 (네이버 재접속 없음).
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     init_shares = request.args.get("init_shares", "100").strip()
     allow_negative_cash = request.args.get("allow_negative_cash") == "on"
     sell_above_start_asset_only = request.args.get("sell_above_start_asset_only") == "on"
@@ -1966,11 +2047,12 @@ def heatmap4():
 
     context = {
         "active": "heatmap4",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "init_shares": init_shares,
         "allow_negative_cash": allow_negative_cash,
         "sell_above_start_asset_only": sell_above_start_asset_only,
@@ -1979,10 +2061,6 @@ def heatmap4():
         "buy_qty_pct_min": buy_qty_pct_min,
         "buy_qty_pct_max": buy_qty_pct_max,
         "error": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "sell_pcts": None,
@@ -2000,27 +2078,10 @@ def heatmap4():
         "hold_only_asset": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("heatmap4.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("heatmap4.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = selected_file = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             init_i = int(init_shares)
             if init_i < 0:
                 raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
@@ -2036,17 +2097,15 @@ def heatmap4():
             if buy_max_i < buy_min_i:
                 raise ValueError("매수 수량 상한은 하한보다 크거나 같아야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            end_date_iso = end_date.strftime("%Y-%m-%d")
+            context["end_date"] = end_date_iso
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             sell_qty_pct_values = range(sell_min_i, sell_max_i + 1)  # 시작 보유 주식수 대비 1% 단위
             buy_qty_pct_values = range(buy_min_i, buy_max_i + 1)
@@ -2070,7 +2129,8 @@ def heatmap4():
                         "total": result["initial_asset"] * (1 + pct / 100),
                         "color": _profit_color(pct, vmax),
                         "link": _build_daily_link(
-                            selected_file, sp, bp, init_i, allow_negative_cash, sell_above_start_asset_only, period=period_i
+                            code, sp, bp, init_i, allow_negative_cash, sell_above_start_asset_only,
+                            end_date=end_date_iso, period=applied_period,
                         ),
                         "is_best": is_best,
                         "is_worst": is_worst,
@@ -2084,20 +2144,20 @@ def heatmap4():
             context["initial_asset"] = result["initial_asset"]
             context["hold_only_asset"] = result["hold_only_asset"]
             context["best_link"] = _build_daily_link(
-                selected_file, result["best"]["sell_pct"], result["best"]["buy_pct"],
-                init_i, allow_negative_cash, sell_above_start_asset_only, period=period_i,
+                code, result["best"]["sell_pct"], result["best"]["buy_pct"],
+                init_i, allow_negative_cash, sell_above_start_asset_only, end_date=end_date_iso, period=applied_period,
             )
             context["worst_link"] = _build_daily_link(
-                selected_file, result["worst"]["sell_pct"], result["worst"]["buy_pct"],
-                init_i, allow_negative_cash, sell_above_start_asset_only, period=period_i,
+                code, result["worst"]["sell_pct"], result["worst"]["buy_pct"],
+                init_i, allow_negative_cash, sell_above_start_asset_only, end_date=end_date_iso, period=applied_period,
             )
 
             def _with_link(combo):
                 return {
                     **combo,
                     "link": _build_daily_link(
-                        selected_file, combo["sell_pct"], combo["buy_pct"],
-                        init_i, allow_negative_cash, sell_above_start_asset_only, period=period_i,
+                        code, combo["sell_pct"], combo["buy_pct"],
+                        init_i, allow_negative_cash, sell_above_start_asset_only, end_date=end_date_iso, period=applied_period,
                     ),
                 }
 
@@ -2121,12 +2181,14 @@ def heatmap5():
     시작 보유 주식수 대비) = 2,500가지 조합의 수익률을 계산해 히트맵으로 보여준다.
     저장된 로컬 CSV만 사용 (네이버 재접속 없음).
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     init_shares = request.args.get("init_shares", "100").strip()
     no_sell = request.args.get("no_sell") == "on"
     no_buy = request.args.get("no_buy") == "on"
@@ -2137,11 +2199,12 @@ def heatmap5():
 
     context = {
         "active": "heatmap5",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "init_shares": init_shares,
         "no_sell": no_sell,
         "no_buy": no_buy,
@@ -2150,10 +2213,6 @@ def heatmap5():
         "qty_pct_min": qty_pct_min,
         "qty_pct_max": qty_pct_max,
         "error": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "gaps": None,
@@ -2171,27 +2230,10 @@ def heatmap5():
         "hold_only_asset": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("heatmap5.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("heatmap5.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = selected_file = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             init_i = int(init_shares)
             if init_i < 0:
                 raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
@@ -2207,17 +2249,15 @@ def heatmap5():
             if qty_max_i < qty_min_i:
                 raise ValueError("수량 상한은 하한보다 크거나 같아야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            end_date_iso = end_date.strftime("%Y-%m-%d")
+            context["end_date"] = end_date_iso
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             gap_values = range(gap_min_i, gap_max_i + 1)  # 1% 단위
             qty_percent_values = range(qty_min_i, qty_max_i + 1)  # 시작 보유 주식수 대비 1% 단위
@@ -2239,7 +2279,7 @@ def heatmap5():
                         "gap": g, "qty_pct": qp, "pct": pct,
                         "total": result["initial_asset"] * (1 + pct / 100),
                         "color": _profit_color(pct, vmax),
-                        "link": _build_daily2_link(selected_file, g, qp, init_i, no_sell, no_buy, period=period_i),
+                        "link": _build_daily2_link(code, g, qp, init_i, no_sell, no_buy, end_date=end_date_iso, period=applied_period),
                         "is_best": is_best,
                         "is_worst": is_worst,
                     })
@@ -2252,17 +2292,17 @@ def heatmap5():
             context["initial_asset"] = result["initial_asset"]
             context["hold_only_asset"] = result["hold_only_asset"]
             context["best_link"] = _build_daily2_link(
-                selected_file, result["best"]["gap"], result["best"]["qty_pct"], init_i, no_sell, no_buy, period=period_i
+                code, result["best"]["gap"], result["best"]["qty_pct"], init_i, no_sell, no_buy, end_date=end_date_iso, period=applied_period
             )
             context["worst_link"] = _build_daily2_link(
-                selected_file, result["worst"]["gap"], result["worst"]["qty_pct"], init_i, no_sell, no_buy, period=period_i
+                code, result["worst"]["gap"], result["worst"]["qty_pct"], init_i, no_sell, no_buy, end_date=end_date_iso, period=applied_period
             )
 
             def _with_link(combo):
                 return {
                     **combo,
                     "link": _build_daily2_link(
-                        selected_file, combo["gap"], combo["qty_pct"], init_i, no_sell, no_buy, period=period_i
+                        code, combo["gap"], combo["qty_pct"], init_i, no_sell, no_buy, end_date=end_date_iso, period=applied_period
                     ),
                 }
 
@@ -2288,12 +2328,14 @@ def heatmap6():
     축으로 고르지 않은 하락gap은 값을 비워두면 daily_reference_strategy()의 기본 동작과
     동일하게 그 셀의 상승gap과 같은 값을 쓴다("하락gap을 상승gap과 동일하게").
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     init_shares = request.args.get("init_shares", "100").strip()
     allow_negative_cash = request.args.get("allow_negative_cash") == "on"
     no_sell = request.args.get("no_sell") == "on"
@@ -2316,11 +2358,12 @@ def heatmap6():
 
     context = {
         "active": "heatmap6",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "init_shares": init_shares,
         "allow_negative_cash": allow_negative_cash,
         "no_sell": no_sell,
@@ -2330,10 +2373,6 @@ def heatmap6():
         "features": DAILY3_HEATMAP_FEATURES,
         "feature_inputs": feature_inputs,
         "error": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "x_label": None,
@@ -2353,27 +2392,10 @@ def heatmap6():
         "hold_only_asset": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("heatmap6.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("heatmap6.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = selected_file = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             if x_feature == y_feature:
                 raise ValueError("x축과 y축은 서로 다른 항목이어야 합니다.")
             if x_feature not in DAILY3_HEATMAP_FEATURES or y_feature not in DAILY3_HEATMAP_FEATURES:
@@ -2408,17 +2430,15 @@ def heatmap6():
                             raise ValueError(f"{meta['label']} 고정값은 0보다 커야 합니다.")
                         fixed_values[feat] = val
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            end_date_iso = end_date.strftime("%Y-%m-%d")
+            context["end_date"] = end_date_iso
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             result = compute_daily_reference_heatmap_2d(
                 df, x_feature, sweep_ranges[x_feature], y_feature, sweep_ranges[y_feature],
@@ -2440,8 +2460,8 @@ def heatmap6():
 
             def _link_for(params):
                 return _build_daily3_link(
-                    selected_file, params["up_gap"], params["down_gap"], params["qty_pct"], init_i,
-                    allow_negative_cash, no_sell, no_buy, period=period_i,
+                    code, params["up_gap"], params["down_gap"], params["qty_pct"], init_i,
+                    allow_negative_cash, no_sell, no_buy, end_date=end_date_iso, period=applied_period,
                 )
 
             def _link_for_combo(combo):
@@ -2499,12 +2519,14 @@ def heatmap7():
     수익률을 계산해 히트맵으로 보여준다. 기준가/시작 보유 주식수/현금 부족해도 매수 여부는
     폼에서 고정값으로 입력한다. 저장된 로컬 CSV만 사용 (네이버 재접속 없음).
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     init_shares = request.args.get("init_shares", "100").strip()
     base_price = request.args.get("base_price", "").strip()  # 비우면 첫날 종가
     allow_negative_cash = request.args.get("allow_negative_cash") == "on"
@@ -2515,11 +2537,12 @@ def heatmap7():
 
     context = {
         "active": "heatmap7",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "init_shares": init_shares,
         "base_price": base_price,
         "allow_negative_cash": allow_negative_cash,
@@ -2528,10 +2551,6 @@ def heatmap7():
         "recover_min": recover_min,
         "recover_max": recover_max,
         "error": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "triggers": None,
@@ -2551,27 +2570,10 @@ def heatmap7():
         "capital": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("heatmap7.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("heatmap7.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = selected_file = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             init_i = int(init_shares)
             base_price_f = float(base_price) if base_price else None
             if init_i < 0:
@@ -2590,17 +2592,15 @@ def heatmap7():
             if recover_max_i < recover_min_i:
                 raise ValueError("회복률 상한은 하한보다 크거나 같아야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            end_date_iso = end_date.strftime("%Y-%m-%d")
+            context["end_date"] = end_date_iso
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             trigger_values = range(trigger_min_i, trigger_max_i + 1)  # 1% 단위
             recover_values = range(recover_min_i, recover_max_i + 1)  # 1% 단위
@@ -2614,8 +2614,9 @@ def heatmap7():
 
             def _link_for_combo(combo):
                 return _build_recovery_link(
-                    selected_file, combo["buy_trigger_pct"], combo["buy_recover_pct"], init_i,
-                    base_price=base_price_f, allow_negative_cash=allow_negative_cash, period=period_i,
+                    code, combo["buy_trigger_pct"], combo["buy_recover_pct"], init_i,
+                    base_price=base_price_f, allow_negative_cash=allow_negative_cash,
+                    end_date=end_date_iso, period=applied_period,
                 )
 
             cells = []
@@ -2661,6 +2662,159 @@ def heatmap7():
     return render_template("heatmap7.html", **context)
 
 
+@app.route("/heatmap8", methods=["GET"])
+def heatmap8():
+    """
+    trend_trade_strategy() 전용 히트맵: 매도수량% 1~50% x 매수수량% 1~50%(둘 다 1% 단위,
+    시작 보유 주식수 대비) = 2,500가지 조합의 수익률을 계산해 히트맵으로 보여준다.
+    저장된 로컬 CSV만 사용 (네이버 재접속 없음).
+    """
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
+
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
+    init_shares = request.args.get("init_shares", "100").strip()
+    no_sell = request.args.get("no_sell") == "on"
+    no_buy = request.args.get("no_buy") == "on"
+    allow_negative_cash = request.args.get("allow_negative_cash") == "on"
+    sell_qty_pct_min = request.args.get("sell_qty_pct_min", "1").strip()
+    sell_qty_pct_max = request.args.get("sell_qty_pct_max", "50").strip()
+    buy_qty_pct_min = request.args.get("buy_qty_pct_min", "1").strip()
+    buy_qty_pct_max = request.args.get("buy_qty_pct_max", "50").strip()
+
+    context = {
+        "active": "heatmap8",
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
+        "init_shares": init_shares,
+        "no_sell": no_sell,
+        "no_buy": no_buy,
+        "allow_negative_cash": allow_negative_cash,
+        "sell_qty_pct_min": sell_qty_pct_min,
+        "sell_qty_pct_max": sell_qty_pct_max,
+        "buy_qty_pct_min": buy_qty_pct_min,
+        "buy_qty_pct_max": buy_qty_pct_max,
+        "error": None,
+        "applied_period": None,
+        "fetch_note": None,
+        "sell_pcts": None,
+        "buy_pcts": None,
+        "cells": None,
+        "best": None,
+        "worst": None,
+        "best_link": None,
+        "worst_link": None,
+        "top10": None,
+        "bottom10": None,
+        "ranked": None,
+        "ranked_raw": None,
+        "initial_asset": None,
+        "hold_only_asset": None,
+    }
+
+    if code:
+        try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
+            init_i = int(init_shares)
+            if init_i < 0:
+                raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
+
+            sell_min_i = int(sell_qty_pct_min)
+            sell_max_i = int(sell_qty_pct_max)
+            buy_min_i = int(buy_qty_pct_min)
+            buy_max_i = int(buy_qty_pct_max)
+            if sell_min_i < 1 or buy_min_i < 1:
+                raise ValueError("매도/매수 수량 하한은 1 이상이어야 합니다.")
+            if sell_max_i < sell_min_i:
+                raise ValueError("매도 수량 상한은 하한보다 크거나 같아야 합니다.")
+            if buy_max_i < buy_min_i:
+                raise ValueError("매수 수량 상한은 하한보다 크거나 같아야 합니다.")
+
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
+            if df.empty:
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            end_date_iso = end_date.strftime("%Y-%m-%d")
+            context["end_date"] = end_date_iso
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
+
+            sell_qty_pct_values = range(sell_min_i, sell_max_i + 1)  # 시작 보유 주식수 대비 1% 단위
+            buy_qty_pct_values = range(buy_min_i, buy_max_i + 1)
+
+            result = compute_trend_heatmap(
+                df, sell_qty_pct_values, buy_qty_pct_values, initial_shares=init_i,
+                no_sell=no_sell, no_buy=no_buy, allow_negative_cash=allow_negative_cash,
+            )
+
+            vmax = max(abs(result["best"]["profit_pct"]), abs(result["worst"]["profit_pct"]), 1e-9)
+
+            cells = []
+            for si, sp in enumerate(result["sell_pcts"]):
+                for bi, bp in enumerate(result["buy_pcts"]):
+                    pct = result["grid"][si][bi]
+                    is_best = (sp == result["best"]["sell_pct"] and bp == result["best"]["buy_pct"])
+                    is_worst = (sp == result["worst"]["sell_pct"] and bp == result["worst"]["buy_pct"])
+                    cells.append({
+                        "sell_pct": sp, "buy_pct": bp, "pct": pct,
+                        "total": result["initial_asset"] * (1 + pct / 100),
+                        "color": _profit_color(pct, vmax),
+                        "link": _build_trend_link(
+                            code, sp, bp, init_i, no_sell, no_buy, allow_negative_cash,
+                            end_date=end_date_iso, period=applied_period,
+                        ),
+                        "is_best": is_best,
+                        "is_worst": is_worst,
+                    })
+
+            context["sell_pcts"] = result["sell_pcts"]
+            context["buy_pcts"] = result["buy_pcts"]
+            context["cells"] = cells
+            context["best"] = result["best"]
+            context["worst"] = result["worst"]
+            context["initial_asset"] = result["initial_asset"]
+            context["hold_only_asset"] = result["hold_only_asset"]
+            context["best_link"] = _build_trend_link(
+                code, result["best"]["sell_pct"], result["best"]["buy_pct"],
+                init_i, no_sell, no_buy, allow_negative_cash, end_date=end_date_iso, period=applied_period,
+            )
+            context["worst_link"] = _build_trend_link(
+                code, result["worst"]["sell_pct"], result["worst"]["buy_pct"],
+                init_i, no_sell, no_buy, allow_negative_cash, end_date=end_date_iso, period=applied_period,
+            )
+
+            def _with_link(combo):
+                return {
+                    **combo,
+                    "link": _build_trend_link(
+                        code, combo["sell_pct"], combo["buy_pct"],
+                        init_i, no_sell, no_buy, allow_negative_cash, end_date=end_date_iso, period=applied_period,
+                    ),
+                }
+
+            context["top10"] = [_with_link(c) for c in result["top10"]]
+            context["bottom10"] = [_with_link(c) for c in result["bottom10"]]
+            context["ranked"] = [_with_link(c) for c in result["ranked"]]
+            context["ranked_raw"] = result["raw_ranked"]  # 순위별 수익률 그래프의 "중복 제거 off" 데이터 (링크 불필요)
+
+        except ValueError as e:
+            context["error"] = f"입력 오류: {e}"
+        except Exception as e:
+            context["error"] = f"히트맵 계산 중 오류가 발생했습니다: {e}"
+
+    return render_template("heatmap8.html", **context)
+
+
 @app.route("/best", methods=["GET"])
 def best():
     """
@@ -2673,29 +2827,28 @@ def best():
     스윕 상한(%) — 하나의 값을 6개 히트맵의 해당 축에 그대로 전달한다. 이미 100%가 자연스러운
     축(이익회수 gap, 자본회수 매수 회복률)은 그대로 둔다(스윕 대상 아니거나 이미 100%).
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
     init_shares = request.args.get("init_shares", "100").strip()
     sweep_max_pct = request.args.get("sweep_max_pct", "100").strip()
 
     context = {
         "active": "best",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "init_shares": init_shares,
         "sweep_max_pct": sweep_max_pct,
         "error": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "rows": None,
@@ -2703,27 +2856,10 @@ def best():
         "hold_only_asset": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("best.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("best.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = selected_file = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
+
             init_i = int(init_shares)
             if init_i < 0:
                 raise ValueError("시작 주식 수는 0 이상이어야 합니다.")
@@ -2731,17 +2867,15 @@ def best():
             if sweep_max_i < 1:
                 raise ValueError("스윕 상한(%)은 1 이상이어야 합니다.")
 
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
-
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
-            if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            end_date_iso = end_date.strftime("%Y-%m-%d")
+            context["end_date"] = end_date_iso
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             first_price = float(df.sort_values("날짜")["종가"].iloc[0])
             last_price = float(df.sort_values("날짜")["종가"].iloc[-1])
@@ -2761,9 +2895,9 @@ def best():
                 "condition": f"gap {b1['gap']}% / 수량 {b1['qty_pct']}% ({b1['qty']}주)",
                 "counts": f"매도 {b1['매도횟수']}회 / 매수 {b1['매수횟수']}회",
                 "strategy_link": _build_backtest_link(
-                    selected_file, b1["gap"], b1["qty_pct"], init_i, False, False, False, period=period_i,
+                    code, b1["gap"], b1["qty_pct"], init_i, False, False, False, end_date=end_date_iso, period=applied_period,
                 ),
-                "heatmap_link": f"/heatmap?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'gap_max': sweep_max_i, 'qty_pct_max': sweep_max_i})}",
+                "heatmap_link": f"/heatmap?{urlencode({'code': code, 'init_shares': init_i, 'end_date': end_date_iso, 'period': applied_period, 'gap_max': sweep_max_i, 'qty_pct_max': sweep_max_i})}",
             })
 
             # 2) 이익 회수 — /heatmap2와 동일한 기본값 (수량 10% 고정, 회수율 100%, gap 1~sweep_max_pct% / 이익gap 1~100%)
@@ -2778,10 +2912,10 @@ def best():
                 "condition": f"gap {b2['gap']}% / 이익gap {b2['profit_gap']}% (수량 10% 고정, 회수율 100% 고정)",
                 "counts": f"매도 {b2['매도횟수']}회 / 매수 {b2['매수횟수']}회 / 이익회수 {b2['이익회수횟수']}회",
                 "strategy_link": _build_backtest_link(
-                    selected_file, b2["gap"], 10, init_i, False, False, False,
-                    profit_gap=b2["profit_gap"], profit_recover=100, period=period_i,
+                    code, b2["gap"], 10, init_i, False, False, False,
+                    profit_gap=b2["profit_gap"], profit_recover=100, end_date=end_date_iso, period=applied_period,
                 ),
-                "heatmap_link": f"/heatmap2?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'gap_max': sweep_max_i})}",
+                "heatmap_link": f"/heatmap2?{urlencode({'code': code, 'init_shares': init_i, 'end_date': end_date_iso, 'period': applied_period, 'gap_max': sweep_max_i})}",
             })
 
             # 3) 일별 매매 — /heatmap4와 동일한 기본값 (매도/매수 수량 각각 1~sweep_max_pct%)
@@ -2793,9 +2927,9 @@ def best():
                 "condition": f"매도 {b3['sell_pct']}% ({b3['sell_qty']}주) / 매수 {b3['buy_pct']}% ({b3['buy_qty']}주)",
                 "counts": f"매도 {b3['매도횟수']}회 / 매수 {b3['매수횟수']}회",
                 "strategy_link": _build_daily_link(
-                    selected_file, b3["sell_pct"], b3["buy_pct"], init_i, False, False, period=period_i,
+                    code, b3["sell_pct"], b3["buy_pct"], init_i, False, False, end_date=end_date_iso, period=applied_period,
                 ),
-                "heatmap_link": f"/heatmap4?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'sell_qty_pct_max': sweep_max_i, 'buy_qty_pct_max': sweep_max_i})}",
+                "heatmap_link": f"/heatmap4?{urlencode({'code': code, 'init_shares': init_i, 'end_date': end_date_iso, 'period': applied_period, 'sell_qty_pct_max': sweep_max_i, 'buy_qty_pct_max': sweep_max_i})}",
             })
 
             # 4) 일별 매매2 — /heatmap5와 동일한 기본값 (gap/수량 1~sweep_max_pct%)
@@ -2806,8 +2940,8 @@ def best():
                 "profit_pct": b4["profit_pct"], "total": b4["total"],
                 "condition": f"gap {b4['gap']}% / 수량 {b4['qty_pct']}% ({b4['qty']}주)",
                 "counts": f"매도 {b4['매도횟수']}회 / 매수 {b4['매수횟수']}회",
-                "strategy_link": _build_daily2_link(selected_file, b4["gap"], b4["qty_pct"], init_i, period=period_i),
-                "heatmap_link": f"/heatmap5?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'gap_pct_max': sweep_max_i, 'qty_pct_max': sweep_max_i})}",
+                "strategy_link": _build_daily2_link(code, b4["gap"], b4["qty_pct"], init_i, end_date=end_date_iso, period=applied_period),
+                "heatmap_link": f"/heatmap5?{urlencode({'code': code, 'init_shares': init_i, 'end_date': end_date_iso, 'period': applied_period, 'gap_pct_max': sweep_max_i, 'qty_pct_max': sweep_max_i})}",
             })
 
             # 5) 일별 매매3 — /heatmap6과 동일한 기본값 (x=상승gap 1~sweep_max_pct%, y=수량 1~sweep_max_pct%, 하락gap은 상승gap과 동일)
@@ -2822,9 +2956,9 @@ def best():
                 "condition": f"상승gap {b5['up_gap']}% / 하락gap {b5['down_gap']}% / 수량 {b5['qty_pct']}% ({b5['qty']}주)",
                 "counts": f"매도 {b5['매도횟수']}회 / 매수 {b5['매수횟수']}회",
                 "strategy_link": _build_daily3_link(
-                    selected_file, b5["up_gap"], b5["down_gap"], b5["qty_pct"], init_i, period=period_i,
+                    code, b5["up_gap"], b5["down_gap"], b5["qty_pct"], init_i, end_date=end_date_iso, period=applied_period,
                 ),
-                "heatmap_link": f"/heatmap6?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'up_gap_max': sweep_max_i, 'qty_pct_max': sweep_max_i})}",
+                "heatmap_link": f"/heatmap6?{urlencode({'code': code, 'init_shares': init_i, 'end_date': end_date_iso, 'period': applied_period, 'up_gap_max': sweep_max_i, 'qty_pct_max': sweep_max_i})}",
             })
 
             # 6) 자본 회수 — /heatmap7과 동일한 기본값 (트리거 1~sweep_max_pct%, 회복률 1~100%, 기준가=첫날 종가)
@@ -2836,9 +2970,9 @@ def best():
                 "condition": f"매수 트리거 {b6['buy_trigger_pct']}% / 매수 회복률 {b6['buy_recover_pct']}%",
                 "counts": f"매도 {b6['매도횟수']}회 / 매수 {b6['매수횟수']}회",
                 "strategy_link": _build_recovery_link(
-                    selected_file, b6["buy_trigger_pct"], b6["buy_recover_pct"], init_i, period=period_i,
+                    code, b6["buy_trigger_pct"], b6["buy_recover_pct"], init_i, end_date=end_date_iso, period=applied_period,
                 ),
-                "heatmap_link": f"/heatmap7?{urlencode({'file': selected_file, 'init_shares': init_i, 'period': period_i, 'trigger_max': sweep_max_i})}",
+                "heatmap_link": f"/heatmap7?{urlencode({'code': code, 'init_shares': init_i, 'end_date': end_date_iso, 'period': applied_period, 'trigger_max': sweep_max_i})}",
             })
 
             rows.sort(key=lambda r: r["profit_pct"], reverse=True)
@@ -2865,25 +2999,24 @@ def stats():
     보여주는 통계 페이지. gap이나 매매 로직과 무관한 순수 가격 통계이며, 저장된 로컬 CSV를
     사용한다(없거나 기간이 부족하면 다른 페이지들과 동일하게 네이버에서 자동으로 채운다).
     """
-    files = _list_local_csvs()
-    groups = _grouped_local_csvs(files)
-    default_file = _most_recent_file(files)
+    codes = _list_local_codes()
+    default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
 
-    selected_file = request.args.get("file", "").strip()
-    period = request.args.get("period", "").strip()
+    code = request.args.get("code", "102110").strip()
+    end_date_str = request.args.get("end_date", "").strip()
+    start_date_str = request.args.get("start_date", "").strip()
+    period_str = request.args.get("period", "").strip()
+    end_date_str, start_date_str, period_str = _default_display_range(end_date_str, start_date_str, period_str)
 
     context = {
         "active": "stats",
-        "files": files,
-        "groups": groups,
-        "selected_file": selected_file,
-        "default_file": default_file,
-        "period": period,
+        "codes": codes,
+        "code": code,
+        "default_code": default_code,
+        "end_date": end_date_str,
+        "start_date": start_date_str,
+        "period": period_str,
         "error": None,
-        "code": None,
-        "created": None,
-        "created_display": None,
-        "max_days": None,
         "applied_period": None,
         "fetch_note": None,
         "result": None,
@@ -2891,38 +3024,18 @@ def stats():
         "chart_prices": None,
     }
 
-    if selected_file:
-        m = _CSV_NAME_RE.match(selected_file)
-        if not m:
-            context["error"] = "잘못된 파일 형식입니다. 메인 페이지에서 먼저 종목을 조회해주세요."
-            return render_template("stats.html", **context)
-
-        code, created = m.group(1), m.group(2)
-        period_i_req = int(period) if period.isdigit() else None
-        path, created, fetch_note = _ensure_local_csv(code, created, period_i_req)
-        if path is None:
-            context["error"] = fetch_note
-            return render_template("stats.html", **context)
-
-        context["code"] = code
-        context["created"] = created
-        context["created_display"] = f"{created[:4]}-{created[4:6]}-{created[6:]}"
-        context["selected_file"] = selected_file = os.path.basename(path)
-        context["max_days"] = _csv_span_days(path, created)
-        context["fetch_note"] = fetch_note
-
+    if code:
         try:
-            df = pd.read_csv(path, encoding="utf-8-sig", parse_dates=["날짜"])
-            if df.empty:
-                raise ValueError("CSV에 데이터가 없습니다.")
+            start_date, end_date, applied_period = _resolve_query_range(end_date_str, start_date_str, period_str)
 
-            period_i = period_i_req if period_i_req and period_i_req > 0 else context["max_days"]
-            if context["max_days"]:
-                period_i = min(period_i, context["max_days"])
-            df = _slice_by_period(df, created, period_i)
+            df, fetch_note, _, start_date = _ensure_range_df(code, start_date, end_date)
             if df.empty:
-                raise ValueError("선택한 기간에 해당하는 데이터가 없습니다.")
-            context["applied_period"] = period_i
+                raise ValueError(fetch_note or "데이터가 없습니다. 종목 코드를 확인해주세요.")
+            context["end_date"] = end_date.strftime("%Y-%m-%d")
+            context["start_date"] = start_date.strftime("%Y-%m-%d")
+            applied_period = (end_date - start_date).days
+            context["applied_period"] = applied_period
+            context["fetch_note"] = fetch_note
 
             chart_df = df.sort_values("날짜")
             context["chart_labels"] = chart_df["날짜"].dt.strftime("%Y-%m-%d").tolist()

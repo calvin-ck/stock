@@ -3,6 +3,11 @@
   <a href="/stats" class="{{ 'active' if active == 'stats' }}">📊 통계</a>
   <a href="/best" class="{{ 'active' if active == 'best' }}">🏆 최고 수익 비교</a>
   <span class="nav-group">
+    <span class="nav-group-label">추세 매매</span>
+    <a href="/trend" class="{{ 'active' if active == 'trend' }}">백테스트</a>
+    <a href="/heatmap8" class="{{ 'active' if active == 'heatmap8' }}">매도×매수 히트맵</a>
+  </span>
+  <span class="nav-group">
     <span class="nav-group-label">그리드 매매</span>
     <a href="/backtest" class="{{ 'active' if active == 'backtest' }}">백테스트</a>
     <a href="/heatmap" class="{{ 'active' if active == 'heatmap' }}">gap 히트맵</a>

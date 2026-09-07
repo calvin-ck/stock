@@ -209,7 +209,7 @@
     성립할 수 없어 하루에 둘 다 일어나지는 않습니다.
   </p>
 
-  {% if files %}
+  {% if codes %}
   <form method="get" action="/recovery" id="recoveryForm">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
@@ -257,7 +257,7 @@
         {{ code }} — 기준가 {{ "{:,.0f}".format(resolved_base_price) }} / 자본금
         {{ "{:,.0f}".format(capital) }} / 매수 트리거 {{ buy_trigger_pct }}% / 매수 회복률
         {{ buy_recover_pct }}% / 시작 {{ "{:,}".format(init_shares|int) }}주
-        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분)
+        ({{ start_date }} ~ {{ end_date }}, {{ applied_period }}일)
       </h2>
       {% if allow_negative_cash %}
       <div class="option-badges">

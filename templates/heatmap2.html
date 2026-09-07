@@ -277,7 +277,7 @@
     매매/이익회수 일지를 볼 수 있습니다.
   </p>
 
-  {% if files %}
+  {% if codes %}
   <form method="get" action="/heatmap2" id="heatmapForm">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
@@ -362,7 +362,7 @@
     <div class="card">
       <h2>
         {{ code }} — 시작 {{ "{:,}".format(init_shares|int) }}주 / 거래수량 {{ qty_pct }}% ({{ "{:,}".format(qty) }}주) / 자본금 {{ "{:,.0f}".format(capital_used) }} / 회수율 {{ profit_recover }}%
-        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분)
+        ({{ start_date }} ~ {{ end_date }}, {{ applied_period }}일)
       </h2>
       <div class="callout-grid">
         <a class="callout best" href="{{ best_link }}">

@@ -260,7 +260,7 @@
     각 칸을 클릭하면 그 gap/수량 조건 그대로 백테스트 페이지로 이동해 매매일지를 볼 수 있습니다.
   </p>
 
-  {% if files %}
+  {% if codes %}
   <form method="get" action="/heatmap" id="heatmapForm">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
@@ -334,7 +334,7 @@
     <div class="card">
       <h2>
         {{ code }} — 시작 {{ "{:,}".format(init_shares|int) }}주 / 시작 자산 {{ "{:,.0f}".format(initial_asset) }}
-        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분)
+        ({{ start_date }} ~ {{ end_date }}, {{ applied_period }}일)
       </h2>
       <div class="callout-grid">
         <a class="callout best" href="{{ best_link }}">

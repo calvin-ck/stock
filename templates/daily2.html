@@ -204,7 +204,7 @@
     주식수가 모자라면 건너뜁니다 (공매도 없음).
   </p>
 
-  {% if files %}
+  {% if codes %}
   <form method="get" action="/daily2" id="daily2Form">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
@@ -253,7 +253,7 @@
       <h2>
         {{ code }} — gap {{ gap_pct }}% / 수량 {{ qty_pct }}% ({{ "{:,}".format(qty) }}주) /
         시작 {{ "{:,}".format(init_shares|int) }}주
-        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분)
+        ({{ start_date }} ~ {{ end_date }}, {{ applied_period }}일)
       </h2>
       {% if no_sell or no_buy %}
       <div class="option-badges">

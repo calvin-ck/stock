@@ -1,32 +1,44 @@
-{# 종목(group_select) -> 생성일자(date_select) -> 기간(period) -> 숨은 file input.
-   groups/selected_file/default_file/period/max_days는 각 라우트의 context에서 온다. #}
+{# 종목(code) -> 종료일(end_date) -> 시작일(start_date) 또는 기간(period). 종목당 로컬
+   파일이 하나(data/{code}.csv)라 서버가 나머지를 알아서 계산한다. 세 필드 모두 서버에서
+   기본값이 채워져 온다(종료일=오늘, 기간=30일, 시작일=종료일-기간 — _default_display_range()
+   참고). 시작일이 있으면 기간은 무시되므로, 아래 스크립트가 사용자가 실제로 건드린 필드만
+   값을 남기고 반대쪽을 비워서 항상 의도한 쪽이 적용되게 한다.
+   codes/code/end_date/start_date/period는 각 라우트의 context에서 온다. #}
 <div class="field">
-  <label for="group_select">종목 데이터</label>
-  <select id="group_select" required>
+  <label for="code_select">종목 데이터</label>
+  <select id="code_select" name="code" required>
     <option value="">선택하세요</option>
-    {% for g in groups %}
-    <option value="{{ g.code }}">{{ g.code }}</option>
+    {% for c in codes %}
+    <option value="{{ c.code }}" {% if c.code == code %}selected{% endif %}>
+      {{ c.code }} ({{ c.min_date }} ~ {{ c.max_date }})
+    </option>
     {% endfor %}
   </select>
 </div>
 <div class="field">
-  <label for="date_select">생성일자</label>
-  <select id="date_select" required disabled>
-    <option value="">종목을 먼저 선택하세요</option>
-  </select>
+  <label for="end_date">종료일 <span class="hint">비우면 오늘</span></label>
+  <input type="date" name="end_date" id="end_date" value="{{ end_date }}">
 </div>
 <div class="field">
-  <label for="period">기간(일) <span class="hint">비우면 최대 범위</span></label>
-  <input type="number" name="period" id="period" min="1" value="{{ period }}"
-         placeholder="{% if max_days %}최대 {{ max_days }}일{% else %}자동{% endif %}">
+  <label for="start_date">시작일 <span class="hint">입력하면 기간 대신 사용</span></label>
+  <input type="date" name="start_date" id="start_date" value="{{ start_date }}">
 </div>
-<input type="hidden" name="file" id="file" value="{{ selected_file }}">
+<div class="field">
+  <label for="period">기간(일) <span class="hint">시작일 비우면 사용, 기본 30일</span></label>
+  <input type="number" name="period" id="period" min="1" value="{{ period }}">
+</div>
 <script>
-  window.CSV_SELECTOR_DATA = {
-    groups: {{ groups | tojson }},
-    selectedFile: "{{ selected_file }}",
-    defaultFile: "{{ default_file }}",
-    hasExplicitPeriod: {{ 'true' if period else 'false' }},
-  };
+  (function () {
+    var startInput = document.getElementById('start_date');
+    var periodInput = document.getElementById('period');
+    if (!startInput || !periodInput) return;
+    // 시작일을 직접 입력하면 기간을, 기간을 직접 입력하면 시작일을 비워서
+    // 사용자가 마지막으로 건드린 쪽만 서버에 전달되게 한다(시작일이 있으면 기간은 무시됨).
+    startInput.addEventListener('input', function () {
+      if (startInput.value) periodInput.value = '';
+    });
+    periodInput.addEventListener('input', function () {
+      if (periodInput.value) startInput.value = '';
+    });
+  })();
 </script>
-<script src="{{ url_for('static', filename='js/csv_selector.js') }}"></script>

@@ -182,7 +182,7 @@
     자연스러운 이익회수 gap·매수 회복률 축은 그대로 둡니다).
   </p>
 
-  {% if files %}
+  {% if codes %}
   <form method="get" action="/best" id="bestForm">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
@@ -214,7 +214,7 @@
     <div class="card">
       <h2>
         {{ code }} — 시작 {{ "{:,}".format(init_shares|int) }}주
-        ({{ applied_period }}일 데이터 (최대 {{ max_days }}일), {{ created_display }} 조회분)
+        ({{ start_date }} ~ {{ end_date }}, {{ applied_period }}일)
       </h2>
       <div class="summary-grid">
         <div class="stat">
