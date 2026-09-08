@@ -3,6 +3,8 @@
 종목 코드와 기간(오늘부터 n일 전)을 입력하면 네이버 금융에서 일별 시세를 가져오는 웹 앱입니다.
 그리드(등락폭) 매매 전략 백테스트 및 매매일지 확인 기능도 포함되어 있습니다.
 
+배포 주소: https://stock-wgke.onrender.com/
+
 ## 구성
 
 - `core.py` — 네이버 금융 스크래핑 + 6개 매매 전략(그리드/이익회수/일별역추세/트레일링역추세/
@@ -12,17 +14,12 @@
 - `templates/index.html` — 시세 조회 + 가격 통계 페이지 (`/`, 입력 폼 → 가격 통계(상승/하락
   비율·연속 일수 분포·등락률 분포·갭 분석) → 일별 시세 표/차트, Chart.js)
 
-전략별 백테스트/히트맵 템플릿은 `core.py`의 전략 함수 이름을 그대로 따서 지었다(둘을 서로
-찾기 쉽도록):
-
-| 전략 | 라우트(백테스트 · 히트맵) | 템플릿 | `core.py` 함수 |
-|---|---|---|---|
-| 트레일링 그리드 매매 | `/grid_trade` · `/grid_trade_heatmap` | `grid_trade.html` · `grid_trade_heatmap.html` | `grid_trade_strategy()` |
-| 트레일링 이익회수 | `/profit_recovery` · `/profit_recovery_heatmap` | `profit_recovery.html` · `profit_recovery_heatmap.html` | `grid_trade_strategy()`(매수/매도 없이 이익 회수만) |
-| 일별 역추세 매매 | `/daily_reversal` · `/daily_reversal_heatmap` | `daily_reversal.html` · `daily_reversal_heatmap.html` | `daily_reversal_strategy()` |
-| 트레일링 역추세 매매 | `/daily_gap` · `/daily_gap_heatmap` | `daily_gap.html` · `daily_gap_heatmap.html` | `daily_gap_strategy()` |
-| 고정기준가 역추세 매매 | `/daily_reference` · `/daily_reference_heatmap` | `daily_reference.html` · `daily_reference_heatmap.html` | `daily_reference_strategy()` |
-| 자본 회수 | `/capital_recovery` · `/capital_recovery_heatmap` | `capital_recovery.html` · `capital_recovery_heatmap.html` | `capital_recovery_strategy()` |
+전략별 백테스트/히트맵 라우트·템플릿·`core.py` 함수는 모두 같은 이름을 쓴다(예: `/grid_trade` →
+`grid_trade.html` → `grid_trade_strategy()`, 히트맵도 동일하게 `grid_trade_heatmap` 셋).
+6개 전략은 트레일링 그리드 매매(`grid_trade`), 트레일링 이익회수(`profit_recovery`, 매수/매도
+없이 `grid_trade_strategy()`의 이익 회수만 사용), 일별 역추세 매매(`daily_reversal`), 트레일링
+역추세 매매(`daily_gap`), 고정기준가 역추세 매매(`daily_reference`), 자본 회수
+(`capital_recovery`)다.
 
 - `templates/best.html` — 전략별 최고 수익 비교 페이지 (`/best`)
 - `templates/best_heatmap.html` — 전략별 × 기간별(180/90/60/30/14/7일) 최고 수익률 히트맵 (`/best_heatmap`)
