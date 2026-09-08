@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>전략별 스윕 상한 비교 히트맵</title>
+<style>
+  :root {
+    --up: #d24343;
+    --down: #2a6fd6;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --border: #e3e5e8;
+    --text: #1f2328;
+    --muted: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 32px 16px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  .nav {
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .nav .nav-home { color: #2a6fd6; text-decoration: none; font-weight: 600; }
+  .nav .nav-home:hover { text-decoration: underline; }
+  .nav .nav-home.active { color: var(--text); text-decoration: underline; }
+  .nav a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
+  .nav .nav-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 14px 5px 12px;
+  }
+  .nav .nav-group-label {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding-right: 8px;
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .nav .nav-group a { color: #2a6fd6; text-decoration: none; white-space: nowrap; }
+  .nav .nav-group a:hover { text-decoration: underline; }
+  .nav .nav-group a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; }
+  .sub-list { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; padding-left: 20px; }
+  .sub-list > li { margin-bottom: 4px; }
+  .sub-list ul { margin: 4px 0 4px 0; padding-left: 18px; }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--card);
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field .hint { font-weight: 400; color: var(--muted); }
+  form select, form input {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  form select { min-width: 180px; }
+  form input[type="number"] { width: 110px; }
+  form button {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #1f2328;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    height: 41px;
+  }
+  form button:hover { background: #3b3f45; }
+
+  .empty {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .empty a { color: #2a6fd6; }
+
+  .error {
+    background: #fdecec;
+    color: var(--up);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 14px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 12px 0; }
+
+  .matrix-scroll { overflow-x: auto; }
+  table.matrix { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.matrix th, table.matrix td {
+    padding: 10px 12px; text-align: center; border: 1px solid var(--border); white-space: nowrap;
+  }
+  table.matrix thead th {
+    background: var(--bg); color: var(--muted); font-weight: 600; font-size: 12px;
+  }
+  table.matrix tbody th {
+    text-align: left; background: var(--bg); color: var(--text); font-weight: 600;
+    display: flex; align-items: center; gap: 6px;
+  }
+  table.matrix td a {
+    display: block; color: inherit; text-decoration: none;
+  }
+  table.matrix td.na { color: var(--muted); font-weight: 400; }
+  table.matrix .cell-pct { font-weight: 700; }
+  table.matrix tr.hold-row th, table.matrix tr.hold-row td {
+    border-top: 2px solid var(--text);
+  }
+  table.matrix tr.hold-row th { font-style: italic; }
+  table.matrix tr.hold-row td span { display: block; font-weight: 700; }
+  .legend {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 14px;
+  }
+  .legend-bar {
+    width: 160px;
+    height: 10px;
+    border-radius: 5px;
+    background: linear-gradient(to right, var(--down), #f5f6f8, var(--up));
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  {% include "_nav.html" %}
+  <h1>🎯 전략별 스윕 상한 비교 히트맵</h1>
+  <ul class="sub-list">
+    <li>6개 전략(트레일링 그리드 매매, 트레일링 이익회수, 일별 역추세 매매, 트레일링
+      역추세 매매, 고정기준가 역추세 매매, 자본 회수)이 <b>스윕 상한(%)</b>을 넓혀갈
+      때, 그 안에서 나오는 최고 수익률이 어떻게 바뀌는지 11개 지점(1, 10, 20, ...,
+      100)으로 한 번에 비교하는 히트맵입니다.</li>
+    <li>작동 방식
+      <ul>
+        <li>스윕 상한 N에서의 최고 수익률은 "gap·수량·매수 트리거 축을 1~N까지만
+          스윕했을 때"의 최고값과 같습니다. 이미 100%가 자연스러운 축(이익회수
+          회수율·자본회수 매수 회복률)은 스윕 상한과 무관하게 항상 1~100 전체를
+          봅니다.</li>
+        <li>전략마다 1~100 전체를 한 번만 계산해두고, 그 안에서 표시할 11개 N에
+          대한 최댓값만 뽑아 쓰기 때문에 전략당 다시 계산하지 않습니다.</li>
+      </ul>
+    </li>
+    <li>기능
+      <ul>
+        <li>각 칸을 클릭하면 그 조합 그대로 해당 전략의 실제 백테스트 페이지로
+          이동합니다.</li>
+        <li>스윕 상한이 커질수록 탐색 범위가 넓어질 뿐이라, 같은 행 안에서 수익률은
+          오른쪽으로 갈수록 낮아지지 않습니다(같거나 더 좋아짐).</li>
+        <li>맨 아래 <b>🤚 매도/매수 없음(단순 보유)</b> 행은 그 기간 동안 아무 매매 없이
+          그냥 들고만 있었을 때의 수익률입니다. 스윕 상한과 무관하게 값이 같아
+          참고용으로만 넣었고, 클릭 링크는 없습니다.</li>
+      </ul>
+    </li>
+  </ul>
+
+  {% if codes %}
+  <form method="get" action="/best_sweep_heatmap" id="bestSweepForm">
+    <div class="form-row">
+      <div class="field">
+        <label for="code_select">종목 데이터</label>
+        <select id="code_select" name="code" required>
+          <option value="">선택하세요</option>
+          {% for c in codes %}
+          <option value="{{ c.code }}" {% if c.code == code %}selected{% endif %}>
+            {{ c.code }} ({{ c.min_date }} ~ {{ c.max_date }})
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="end_date">종료일 <span class="hint">비우면 오늘</span></label>
+        <input type="date" name="end_date" id="end_date" value="{{ end_date }}">
+      </div>
+      <div class="field">
+        <label for="start_date">시작일 <span class="hint">입력하면 기간 대신 사용</span></label>
+        <input type="date" name="start_date" id="start_date" value="{{ start_date }}">
+      </div>
+      <div class="field">
+        <label for="period">기간(일) <span class="hint">시작일 비우면 사용, 기본 30일</span></label>
+        <input type="number" name="period" id="period" min="1" value="{{ period }}">
+      </div>
+    </div>
+    <script>
+      (function () {
+        var startInput = document.getElementById('start_date');
+        var periodInput = document.getElementById('period');
+        if (!startInput || !periodInput) return;
+        startInput.addEventListener('input', function () {
+          if (startInput.value) periodInput.value = '';
+        });
+        periodInput.addEventListener('input', function () {
+          if (periodInput.value) startInput.value = '';
+        });
+      })();
+    </script>
+
+    <div class="form-row">
+      <div class="field">
+        <label for="init_shares">시작 보유 주식수</label>
+        <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
+      </div>
+      <button type="submit">히트맵 계산</button>
+    </div>
+  </form>
+  {% else %}
+  <div class="empty">
+    저장된 데이터가 없습니다. <a href="/">메인 페이지</a>에서 종목을 먼저 조회해주세요.<br>
+    (조회한 데이터는 자동으로 로컬 CSV에 저장되어 여기서 재사용됩니다.)
+  </div>
+  {% endif %}
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {% include "_fetch_note.html" %}
+
+  {% if rows %}
+    <div class="card">
+      <h2>
+        {{ code }} — 시작 {{ "{:,}".format(init_shares|int) }}주 / 시작 자산 {{ "{:,.0f}".format(initial_asset) }}
+        ({{ start_date }} ~ {{ end_date }}, {{ applied_period }}일)
+      </h2>
+      <div class="matrix-scroll">
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>전략 \ 스윕 상한</th>
+              {% for n in sweep_values %}
+              <th>{{ n }}%</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            <tr>
+              <th><span>{{ row.icon }}</span> {{ row.label }}</th>
+              {% for cell in row.cells %}
+              <td style="background-color: {{ cell.color }};">
+                <a href="{{ cell.link }}" title="최종자산 {{ '{:,.0f}'.format(cell.total) }}">
+                  <span class="cell-pct">{{ "{:+.2f}".format(cell.profit_pct) }}%</span>
+                </a>
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+            {% if hold_row %}
+            <tr class="hold-row">
+              <th><span>{{ hold_row.icon }}</span> {{ hold_row.label }}</th>
+              {% for cell in hold_row.cells %}
+              <td style="background-color: {{ cell.color }};">
+                <span class="cell-pct" title="최종자산 {{ '{:,.0f}'.format(cell.total) }}">
+                  {{ "{:+.2f}".format(cell.profit_pct) }}%
+                </span>
+              </td>
+              {% endfor %}
+            </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+      <div class="legend">
+        <span>손실</span>
+        <span class="legend-bar"></span>
+        <span>수익</span>
+      </div>
+    </div>
+  {% endif %}
+</div>
+</body>
+</html>

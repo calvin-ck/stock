@@ -1,37 +1,36 @@
 <div class="nav">
-  <a href="/" class="nav-home {{ 'active' if active == 'index' }}">🏠 메인 조회</a>
-  <a href="/stats" class="{{ 'active' if active == 'stats' }}">📊 통계</a>
+  <a href="/" class="nav-home {{ 'active' if active == 'index' }}">🏠 메인 조회 · 통계</a>
   <a href="/best" class="{{ 'active' if active == 'best' }}">🏆 최고 수익 비교</a>
+  <a href="/best_heatmap" class="{{ 'active' if active == 'best_heatmap' }}">📆 기간별 비교</a>
+  <a href="/best_sweep_heatmap" class="{{ 'active' if active == 'best_sweep_heatmap' }}">🎯 스윕 상한 비교</a>
   <span class="nav-group">
-    <span class="nav-group-label">추세 매매</span>
-    <a href="/trend" class="{{ 'active' if active == 'trend' }}">백테스트</a>
-    <a href="/heatmap8" class="{{ 'active' if active == 'heatmap8' }}">매도×매수 히트맵</a>
+    <span class="nav-group-label">트레일링 그리드 매매</span>
+    <a href="/grid_trade" class="{{ 'active' if active == 'grid_trade' }}">백테스트</a>
+    <a href="/grid_trade_heatmap" class="{{ 'active' if active == 'grid_trade_heatmap' }}">gap × 수량 히트맵</a>
   </span>
   <span class="nav-group">
-    <span class="nav-group-label">그리드 매매</span>
-    <a href="/backtest" class="{{ 'active' if active == 'backtest' }}">백테스트</a>
-    <a href="/heatmap" class="{{ 'active' if active == 'heatmap' }}">gap 히트맵</a>
-    <a href="/heatmap2" class="{{ 'active' if active == 'heatmap2' }}">이익회수 히트맵</a>
-    <a href="/heatmap3" class="{{ 'active' if active == 'heatmap3' }}">통합 히트맵</a>
+    <span class="nav-group-label">트레일링 이익회수</span>
+    <a href="/profit_recovery" class="{{ 'active' if active == 'profit_recovery' }}">백테스트</a>
+    <a href="/profit_recovery_heatmap" class="{{ 'active' if active == 'profit_recovery_heatmap' }}">이익gap × 회수율 히트맵</a>
   </span>
   <span class="nav-group">
-    <span class="nav-group-label">일별 방향</span>
-    <a href="/daily" class="{{ 'active' if active == 'daily' }}">일별 매매</a>
-    <a href="/heatmap4" class="{{ 'active' if active == 'heatmap4' }}">매도×매수 히트맵</a>
+    <span class="nav-group-label">일별 역추세 매매</span>
+    <a href="/daily_reversal" class="{{ 'active' if active == 'daily_reversal' }}">백테스트</a>
+    <a href="/daily_reversal_heatmap" class="{{ 'active' if active == 'daily_reversal_heatmap' }}">매도×매수 히트맵</a>
   </span>
   <span class="nav-group">
-    <span class="nav-group-label">일별 방향2</span>
-    <a href="/daily2" class="{{ 'active' if active == 'daily2' }}">일별 매매2</a>
-    <a href="/heatmap5" class="{{ 'active' if active == 'heatmap5' }}">gap×수량 히트맵</a>
+    <span class="nav-group-label">트레일링 역추세 매매</span>
+    <a href="/daily_gap" class="{{ 'active' if active == 'daily_gap' }}">백테스트</a>
+    <a href="/daily_gap_heatmap" class="{{ 'active' if active == 'daily_gap_heatmap' }}">gap×수량 히트맵</a>
   </span>
   <span class="nav-group">
-    <span class="nav-group-label">일별 방향3</span>
-    <a href="/daily3" class="{{ 'active' if active == 'daily3' }}">일별 매매3</a>
-    <a href="/heatmap6" class="{{ 'active' if active == 'heatmap6' }}">상승×하락gap 히트맵</a>
+    <span class="nav-group-label">고정기준가 역추세 매매</span>
+    <a href="/daily_reference" class="{{ 'active' if active == 'daily_reference' }}">백테스트</a>
+    <a href="/daily_reference_heatmap" class="{{ 'active' if active == 'daily_reference_heatmap' }}">상승×하락gap 히트맵</a>
   </span>
   <span class="nav-group">
     <span class="nav-group-label">자본 회수</span>
-    <a href="/recovery" class="{{ 'active' if active == 'recovery' }}">자본회수 매매</a>
-    <a href="/heatmap7" class="{{ 'active' if active == 'heatmap7' }}">트리거×회복률 히트맵</a>
+    <a href="/capital_recovery" class="{{ 'active' if active == 'capital_recovery' }}">백테스트</a>
+    <a href="/capital_recovery_heatmap" class="{{ 'active' if active == 'capital_recovery_heatmap' }}">트리거×회복률 히트맵</a>
   </span>
 </div>

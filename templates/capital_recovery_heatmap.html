@@ -2,13 +2,12 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>이익회수 히트맵 — gap × 이익회수gap 수익률</title>
+<title>자본 회수 히트맵 — 매수 트리거 × 매수 회복률</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
     --up: #d24343;
     --down: #2a6fd6;
-    --recover: #b8860b;
     --bg: #f5f6f8;
     --card: #ffffff;
     --border: #e3e5e8;
@@ -59,6 +58,9 @@
   .nav .nav-group a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
   h1 { font-size: 22px; margin-bottom: 4px; }
   p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; }
+  .sub-list { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; padding-left: 20px; }
+  .sub-list > li { margin-bottom: 4px; }
+  .sub-list ul { margin: 4px 0 4px 0; padding-left: 18px; }
 
   form {
     display: flex;
@@ -98,22 +100,7 @@
     display: flex; align-items: center; gap: 6px;
     font-size: 13px; color: var(--text); white-space: nowrap;
   }
-  .field-group {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: flex-end;
-    padding: 10px 12px;
-    border: 1px dashed var(--border);
-    border-radius: 10px;
-  }
-  .field-group .group-label {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--recover);
-    align-self: center;
-    margin-right: 4px;
-  }
+  .checkbox-field input[type="checkbox"] { width: 16px; height: 16px; }
 
   .empty {
     background: var(--card);
@@ -159,12 +146,15 @@
     transition: transform 0.1s ease;
   }
   .callout:hover { transform: translateY(-1px); }
-  .callout.best { background: #fdecec; border-color: #f6c6c6; }
-  .callout.worst { background: #eaf1fc; border-color: #c4d9f7; }
+  .callout.up { background: #fdecec; border-color: #f6c6c6; }
+  .callout.down { background: #eaf1fc; border-color: #c4d9f7; }
   .callout .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
   .callout .pct { font-size: 22px; font-weight: 700; }
-  .callout.best .pct { color: var(--up); }
-  .callout.worst .pct { color: var(--down); }
+  .callout .pct.up { color: var(--up); }
+  .callout .pct.down { color: var(--down); }
+  .callout .final { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 2px; }
+  .callout .final.up { color: var(--up); }
+  .callout .final.down { color: var(--down); }
   .callout .cond { font-size: 13px; color: var(--muted); margin-top: 6px; }
 
   .heatmap-scroll { overflow-x: auto; padding-bottom: 8px; }
@@ -266,34 +256,36 @@
 <body>
 <div class="wrap">
   {% include "_nav.html" %}
-  <h1>🔥🏦 이익회수 히트맵 — gap × 이익회수gap</h1>
-  <p class="sub">
-    매매 gap(%)과 이익 회수 gap(%)의 범위를 지정하면 그 조합별(1% 단위) 수익률을 한번에
-    계산합니다. 이익 회수 gap은 자본금(비우면 시작 자산) 대비 얼마를 벌었는지를 기준으로
-    판단하며, 수익률(%)도 이 자본금을 시작 자산으로 삼아 계산합니다. 거래 수량(%, 시작 보유
-    주식수 대비), 회수율, 자본금은 아래에서 <b>고정 숫자</b>로 입력합니다.
-    저장된 로컬 CSV만 사용하므로 네이버에 다시 접속하지 않습니다.
-    각 칸을 클릭하면 그 조건 그대로(이익 회수 사용 켠 상태로) 백테스트 페이지로 이동해
-    매매/이익회수 일지를 볼 수 있습니다.
-  </p>
+  <h1>💰🔥 자본 회수 히트맵 — 매수 트리거 × 매수 회복률</h1>
+  <ul class="sub-list">
+    <li>"자본 회수"(주식 평가금액이 자본금을 넘으면 초과분을 팔고, 자본금 대비 매수
+      트리거gap% 이상 내려가면 부족분 중 매수 회복률%만큼 사서 채우는 전략)를 <b>매수
+      트리거 gap%</b> × <b>매수 회복률%</b> 조합별로 스윕해서 수익률을 한 번에 비교하는
+      히트맵입니다.</li>
+    <li>작동 방식
+      <ul>
+        <li>매수 트리거 gap%와 매수 회복률% 각각의 범위(최소~최대)를 정하면 그 조합을
+          1% 단위로 모두 계산합니다. 기준가·시작 보유 주식수·현금 부족해도 매수 여부는
+          고정값으로 입력합니다(스윕 대상 아님).</li>
+      </ul>
+    </li>
+    <li>기능
+      <ul>
+        <li>각 칸을 클릭하면 그 조건 그대로 <code>/capital_recovery</code> 백테스트 페이지로
+          이동해 매매일지를 볼 수 있습니다.</li>
+        <li>최대/최소 수익률 조합과 상위/하위 10개 조합, 매매 안 했을 때 대비 성과 차이를
+          함께 보여줍니다.</li>
+      </ul>
+    </li>
+  </ul>
 
   {% if codes %}
-  <form method="get" action="/heatmap2" id="heatmapForm">
+  <form method="get" action="/capital_recovery_heatmap" id="heatmapForm">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
+    </div>
 
-      <div class="field checkbox-field">
-        <label>
-          <input type="checkbox" name="no_sell" value="on" {% if no_sell %}checked{% endif %}>
-          매도 안 함
-        </label>
-      </div>
-      <div class="field checkbox-field">
-        <label>
-          <input type="checkbox" name="no_buy" value="on" {% if no_buy %}checked{% endif %}>
-          매수 안 함
-        </label>
-      </div>
+    <div class="form-row">
       <div class="field checkbox-field">
         <label>
           <input type="checkbox" name="allow_negative_cash" value="on" {% if allow_negative_cash %}checked{% endif %}>
@@ -304,42 +296,28 @@
 
     <div class="form-row">
       <div class="field">
-        <label for="gap_min">매매 gap 하한(%)</label>
-        <input type="number" name="gap_min" id="gap_min" min="1" value="{{ gap_min }}" required>
-      </div>
-      <div class="field">
-        <label for="gap_max">매매 gap 상한(%)</label>
-        <input type="number" name="gap_max" id="gap_max" min="1" value="{{ gap_max }}" required>
-      </div>
-      <div class="field">
-        <label for="profit_gap_min">이익 gap 하한(%)</label>
-        <input type="number" name="profit_gap_min" id="profit_gap_min" min="1" value="{{ profit_gap_min }}" required>
-      </div>
-      <div class="field">
-        <label for="profit_gap_max">이익 gap 상한(%)</label>
-        <input type="number" name="profit_gap_max" id="profit_gap_max" min="1" value="{{ profit_gap_max }}" required>
-      </div>
-    </div>
-
-    <div class="form-row">
-      <div class="field">
         <label for="init_shares">시작 보유 주식수</label>
         <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
       </div>
       <div class="field">
-        <label for="capital">자본금 <span class="hint">비우면 시작 자산</span></label>
-        <input type="number" name="capital" id="capital" step="1" min="0" value="{{ capital }}" placeholder="시작 자산">
+        <label for="base_price">기준가 <span class="hint">비우면 첫날 종가</span></label>
+        <input type="number" name="base_price" id="base_price" step="0.01" min="0.01" value="{{ base_price }}" placeholder="첫날 종가">
       </div>
-      <div class="field-group">
-        <span class="group-label">🏦 고정값</span>
-        <div class="field">
-          <label for="qty_pct">거래 수량 (%) <span class="hint">시작 보유 주식수 대비</span></label>
-          <input type="number" name="qty_pct" id="qty_pct" step="0.1" min="0.1" value="{{ qty_pct }}" required>
-        </div>
-        <div class="field">
-          <label for="profit_recover">회수율 (%)</label>
-          <input type="number" name="profit_recover" id="profit_recover" step="1" min="1" max="100" value="{{ profit_recover }}" required>
-        </div>
+      <div class="field">
+        <label for="trigger_min">매수 트리거 gap 하한(%)</label>
+        <input type="number" name="trigger_min" id="trigger_min" min="1" value="{{ trigger_min }}" required>
+      </div>
+      <div class="field">
+        <label for="trigger_max">매수 트리거 gap 상한(%)</label>
+        <input type="number" name="trigger_max" id="trigger_max" min="1" value="{{ trigger_max }}" required>
+      </div>
+      <div class="field">
+        <label for="recover_min">매수 회복률 하한(%)</label>
+        <input type="number" name="recover_min" id="recover_min" min="1" value="{{ recover_min }}" required>
+      </div>
+      <div class="field">
+        <label for="recover_max">매수 회복률 상한(%)</label>
+        <input type="number" name="recover_max" id="recover_max" min="1" value="{{ recover_max }}" required>
       </div>
       <button type="submit">히트맵 계산</button>
     </div>
@@ -361,25 +339,33 @@
   {% if cells %}
     <div class="card">
       <h2>
-        {{ code }} — 시작 {{ "{:,}".format(init_shares|int) }}주 / 거래수량 {{ qty_pct }}% ({{ "{:,}".format(qty) }}주) / 자본금 {{ "{:,.0f}".format(capital_used) }} / 회수율 {{ profit_recover }}%
+        {{ code }} — 기준가 {{ "{:,.0f}".format(resolved_base_price) }} / 자본금
+        {{ "{:,.0f}".format(capital) }} / 시작 {{ "{:,}".format(init_shares|int) }}주 / 시작 자산
+        {{ "{:,.0f}".format(initial_asset) }}
         ({{ start_date }} ~ {{ end_date }}, {{ applied_period }}일)
       </h2>
       <div class="callout-grid">
-        <a class="callout best" href="{{ best_link }}">
+        <a class="callout {{ 'up' if best['profit_pct'] >= 0 else 'down' }}" href="{{ best_link }}">
           <div class="label">🔺 최대 수익률</div>
-          <div class="pct">{{ "{:+.2f}".format(best["profit_pct"]) }}%</div>
-          <div class="cond">
-            gap {{ best["gap"] }}% / 이익gap {{ best["profit_gap"] }}% /
-            매수 {{ best["매수횟수"] }}회 / 매도 {{ best["매도횟수"] }}회 / 회수 {{ best["이익회수횟수"] }}회
+          <div class="pct {{ 'up' if best['profit_pct'] >= 0 else 'down' }}">{{ "{:+.2f}".format(best["profit_pct"]) }}%</div>
+          <div class="final">최종자산 {{ "{:,.0f}".format(best["total"]) }}</div>
+          <div class="final">매매 안 했을 때 {{ "{:,.0f}".format(hold_only_asset) }}</div>
+          <div class="final {{ 'up' if (best['total'] - hold_only_asset) >= 0 else 'down' }}">
+            보유 대비 {{ "{:+,.0f}".format(best["total"] - hold_only_asset) }}
+            ({{ "{:+.2f}".format((best["total"] - hold_only_asset) / hold_only_asset * 100) }}%)
           </div>
+          <div class="cond">트리거 {{ best["buy_trigger_pct"] }}% / 회복률 {{ best["buy_recover_pct"] }}% / 매도 {{ best["매도횟수"] }}회 / 매수 {{ best["매수횟수"] }}회</div>
         </a>
-        <a class="callout worst" href="{{ worst_link }}">
+        <a class="callout {{ 'up' if worst['profit_pct'] >= 0 else 'down' }}" href="{{ worst_link }}">
           <div class="label">🔻 최소 수익률</div>
-          <div class="pct">{{ "{:+.2f}".format(worst["profit_pct"]) }}%</div>
-          <div class="cond">
-            gap {{ worst["gap"] }}% / 이익gap {{ worst["profit_gap"] }}% /
-            매수 {{ worst["매수횟수"] }}회 / 매도 {{ worst["매도횟수"] }}회 / 회수 {{ worst["이익회수횟수"] }}회
+          <div class="pct {{ 'up' if worst['profit_pct'] >= 0 else 'down' }}">{{ "{:+.2f}".format(worst["profit_pct"]) }}%</div>
+          <div class="final">최종자산 {{ "{:,.0f}".format(worst["total"]) }}</div>
+          <div class="final">매매 안 했을 때 {{ "{:,.0f}".format(hold_only_asset) }}</div>
+          <div class="final {{ 'up' if (worst['total'] - hold_only_asset) >= 0 else 'down' }}">
+            보유 대비 {{ "{:+,.0f}".format(worst["total"] - hold_only_asset) }}
+            ({{ "{:+.2f}".format((worst["total"] - hold_only_asset) / hold_only_asset * 100) }}%)
           </div>
+          <div class="cond">트리거 {{ worst["buy_trigger_pct"] }}% / 회복률 {{ worst["buy_recover_pct"] }}% / 매도 {{ worst["매도횟수"] }}회 / 매수 {{ worst["매수횟수"] }}회</div>
         </a>
       </div>
     </div>
@@ -390,21 +376,21 @@
         시작 자산 {{ "{:,.0f}".format(initial_asset) }} · 매매 안 했을 때 최종 자산 {{ "{:,.0f}".format(hold_only_asset) }}
       </p>
       <p class="sub" style="margin-bottom: 16px; font-size: 12px;">
-        수익률이 동일한 조합은 중복 제거되어 하나만 표시됩니다 (같은 수익률 중 gap이 가장 작은 조합, gap도 같으면 이익gap이 가장 작은 조합을 노출). "보유 대비"는 매매 안 했을 때 최종 자산과 비교한 차이(%)입니다.
+        수익률이 동일한 조합은 중복 제거되어 하나만 표시됩니다 (같은 수익률 중 트리거gap이 가장 작은 조합, 트리거gap도 같으면 회복률이 가장 작은 조합을 노출). "보유 대비"는 매매 안 했을 때 최종 자산과 비교한 차이(%)입니다.
       </p>
       <div class="rank-grid">
         <div class="rank-col">
           <div class="rank-title up">🔺 상위 10</div>
           <table class="rank-table">
-            <thead><tr><th>#</th><th>gap</th><th>이익gap</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
+            <thead><tr><th>#</th><th>트리거%</th><th>회복률%</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
             <tbody>
               {% for c in top10 %}
               <tr class="{{ 'best-row' if loop.index == 1 }}">
                 <td>{{ loop.index }}</td>
-                <td><a href="{{ c.link }}">{{ c.gap }}%</a></td>
-                <td><a href="{{ c.link }}">{{ c.profit_gap }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.buy_trigger_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.buy_recover_pct }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
-                <td class="up"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
               </tr>
               {% endfor %}
@@ -414,15 +400,15 @@
         <div class="rank-col">
           <div class="rank-title down">🔻 하위 10</div>
           <table class="rank-table">
-            <thead><tr><th>#</th><th>gap</th><th>이익gap</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
+            <thead><tr><th>#</th><th>트리거%</th><th>회복률%</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
             <tbody>
               {% for c in bottom10 %}
               <tr class="{{ 'worst-row' if loop.index == 1 }}">
                 <td>{{ loop.index }}</td>
-                <td><a href="{{ c.link }}">{{ c.gap }}%</a></td>
-                <td><a href="{{ c.link }}">{{ c.profit_gap }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.buy_trigger_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.buy_recover_pct }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
-                <td class="down"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
               </tr>
               {% endfor %}
@@ -433,21 +419,21 @@
     </div>
 
     <div class="card">
-      <h2>히트맵 (세로: 매매gap {{ gaps[0] }}~{{ gaps[-1] }}%, 가로: 이익회수gap {{ profit_gaps[0] }}~{{ profit_gaps[-1] }}%)</h2>
+      <h2>히트맵 (세로: 매수 트리거 {{ triggers[0] }}~{{ triggers[-1] }}%, 가로: 매수 회복률 {{ recovers[0] }}~{{ recovers[-1] }}%)</h2>
       <div class="heatmap-scroll">
         <div class="heatmap-outer">
-          <div class="axis-y-label">매매 gap (%) — 아래로 갈수록 큼</div>
+          <div class="axis-y-label">매수 트리거 gap (%) — 아래로 갈수록 큼</div>
           <div class="heatmap-col">
-            <div class="heatmap-grid" style="grid-template-columns: repeat({{ profit_gaps|length }}, 12px);">
+            <div class="heatmap-grid" style="grid-template-columns: repeat({{ recovers|length }}, 12px);">
               {% for cell in cells %}
               <a class="heatmap-cell {% if cell.is_best %}best{% elif cell.is_worst %}worst{% endif %}"
                  href="{{ cell.link }}"
                  style="background-color: {{ cell.color }};"
-                 title="gap {{ cell.gap }}% / 이익gap {{ cell.profit_gap }}% → {{ '{:+.2f}'.format(cell.pct) }}%">
+                 title="트리거 {{ cell.buy_trigger_pct }}% / 회복률 {{ cell.buy_recover_pct }}% → {{ '{:+.2f}'.format(cell.pct) }}% (최종자산 {{ '{:,.0f}'.format(cell.total) }})">
               </a>
               {% endfor %}
             </div>
-            <div class="axis-x-label">이익회수 gap (%) — 오른쪽으로 갈수록 큼</div>
+            <div class="axis-x-label">매수 회복률 (%, 부족분 중 채울 비율) — 오른쪽으로 갈수록 큼</div>
           </div>
         </div>
       </div>
@@ -461,8 +447,8 @@
 
     <div class="card">
       <h2>순위별 수익률 변화</h2>
-      <div class="field checkbox-field" style="margin-bottom: 12px;">
-        <label>
+      <div class="field" style="margin-bottom: 12px; flex-direction: row; align-items: center; gap: 6px;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color: var(--text);">
           <input type="checkbox" id="rankChartDedup" checked>
           중복 수익률 제거
         </label>
@@ -471,23 +457,25 @@
     </div>
 
     <div class="card">
-      <details class="ranked-details">
+      <details class="ranked-details" open>
         <summary>전체 수익률 보기 (max → min, {{ ranked|length }}개, 중복 수익률 제거)</summary>
         <p class="sub" style="margin: 8px 0 0 0; font-size: 12px;">
           시작 자산 {{ "{:,.0f}".format(initial_asset) }} · 매매 안 했을 때 최종 자산 {{ "{:,.0f}".format(hold_only_asset) }} · "보유 대비"는 그 자산과 비교한 차이(%)입니다.
         </p>
         <div class="ranked-scroll">
           <table class="rank-table">
-            <thead><tr><th>#</th><th>gap</th><th>이익gap</th><th>매수</th><th>매도</th><th>회수</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
+            <thead><tr><th>#</th><th>트리거%</th><th>회복률%</th><th>매도횟수</th><th>매수횟수</th><th>현금</th><th>보유 주식수</th><th>주식 평가금액</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
             <tbody>
               {% for c in ranked %}
               <tr class="{{ 'best-row' if loop.index == 1 }}{{ ' worst-row' if loop.index == ranked|length }}">
                 <td>{{ loop.index }}</td>
-                <td><a href="{{ c.link }}">{{ c.gap }}%</a></td>
-                <td><a href="{{ c.link }}">{{ c.profit_gap }}%</a></td>
-                <td><a href="{{ c.link }}">{{ c['매수횟수'] }}</a></td>
+                <td><a href="{{ c.link }}">{{ c.buy_trigger_pct }}%</a></td>
+                <td><a href="{{ c.link }}">{{ c.buy_recover_pct }}%</a></td>
                 <td><a href="{{ c.link }}">{{ c['매도횟수'] }}</a></td>
-                <td><a href="{{ c.link }}">{{ c['이익회수횟수'] }}</a></td>
+                <td><a href="{{ c.link }}">{{ c['매수횟수'] }}</a></td>
+                <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c['현금']) }}</a></td>
+                <td><a href="{{ c.link }}">{{ c['보유주식수'] }}</a></td>
+                <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c['주식평가금액']) }}</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
                 <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
@@ -540,7 +528,7 @@
                 label: (item) => {
                   const c = rankChartSource[item.dataIndex];
                   const sign = c.profit_pct >= 0 ? '+' : '';
-                  return `${sign}${c.profit_pct.toFixed(2)}%  (gap ${c.gap}% / 이익gap ${c.profit_gap}% / 매수 ${c['매수횟수']} / 매도 ${c['매도횟수']} / 회수 ${c['이익회수횟수']})`;
+                  return `${sign}${c.profit_pct.toFixed(2)}%  최종자산 ${Math.round(c.total).toLocaleString()}  (트리거 ${c.buy_trigger_pct}% / 회복률 ${c.buy_recover_pct}% / 매도 ${c['매도횟수']} / 매수 ${c['매수횟수']})`;
                 }
               }
             }

@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>일별 매매 히트맵 — 매도수량 × 매수수량</title>
+<title>일별 역추세 매매 히트맵 — 매도수량 × 매수수량</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
@@ -58,6 +58,9 @@
   .nav .nav-group a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
   h1 { font-size: 22px; margin-bottom: 4px; }
   p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; }
+  .sub-list { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; padding-left: 20px; }
+  .sub-list > li { margin-bottom: 4px; }
+  .sub-list ul { margin: 4px 0 4px 0; padding-left: 18px; }
 
   form {
     display: flex;
@@ -142,13 +145,15 @@
     transition: transform 0.1s ease;
   }
   .callout:hover { transform: translateY(-1px); }
-  .callout.best { background: #fdecec; border-color: #f6c6c6; }
-  .callout.worst { background: #eaf1fc; border-color: #c4d9f7; }
+  .callout.up { background: #fdecec; border-color: #f6c6c6; }
+  .callout.down { background: #eaf1fc; border-color: #c4d9f7; }
   .callout .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
   .callout .pct { font-size: 22px; font-weight: 700; }
-  .callout.best .pct { color: var(--up); }
-  .callout.worst .pct { color: var(--down); }
+  .callout .pct.up { color: var(--up); }
+  .callout .pct.down { color: var(--down); }
   .callout .final { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 2px; }
+  .callout .final.up { color: var(--up); }
+  .callout .final.down { color: var(--down); }
   .callout .cond { font-size: 13px; color: var(--muted); margin-top: 6px; }
 
   .heatmap-scroll { overflow-x: auto; padding-bottom: 8px; }
@@ -250,19 +255,33 @@
 <body>
 <div class="wrap">
   {% include "_nav.html" %}
-  <h1>📅🔥 일별 매매 히트맵 — 매도수량 × 매수수량</h1>
-  <p class="sub">
-    "일별 방향 매매"(전날보다 오르면 매도, 내리면 매수) 전략에서 <b>매도수량%</b>와
-    <b>매수수량%</b>(둘 다 시작 보유 주식수 대비)의 범위를 지정하면 그 조합별(1% 단위)
-    수익률을 한번에 계산합니다. 저장된 로컬 CSV만 사용하므로 네이버에 다시 접속하지 않습니다.
-    각 칸을 클릭하면 그 조건 그대로 일별 매매 페이지로 이동해 매매일지를 볼 수 있습니다.
-  </p>
+  <h1>🔄🔥 일별 역추세 매매 히트맵 — 매도수량 × 매수수량</h1>
+  <ul class="sub-list">
+    <li>"일별 역추세 매매"(전날보다 오르면 매도, 내리면 매수)를 <b>매도수량%</b> ×
+      <b>매수수량%</b> 조합별로 스윕해서 수익률을 한 번에 비교하는 히트맵입니다.</li>
+    <li>작동 방식
+      <ul>
+        <li>매도수량%와 매수수량%(둘 다 시작 보유 주식수 대비) 각각의 범위(최소~최대)를
+          정하면 그 조합을 1% 단위로 모두 계산합니다.</li>
+      </ul>
+    </li>
+    <li>기능
+      <ul>
+        <li>각 칸을 클릭하면 그 조건 그대로 <code>/daily_reversal</code> 백테스트 페이지로 이동해
+          매매일지를 볼 수 있습니다.</li>
+        <li>최대/최소 수익률 조합과 상위/하위 10개 조합, 매매 안 했을 때 대비 성과 차이를
+          함께 보여줍니다.</li>
+      </ul>
+    </li>
+  </ul>
 
   {% if codes %}
-  <form method="get" action="/heatmap4" id="heatmapForm">
+  <form method="get" action="/daily_reversal_heatmap" id="heatmapForm">
     <div class="form-row">
       {% include "_csv_file_selector.html" %}
+    </div>
 
+    <div class="form-row">
       <div class="field checkbox-field">
         <label>
           <input type="checkbox" name="allow_negative_cash" value="on" {% if allow_negative_cash %}checked{% endif %}>
@@ -279,6 +298,10 @@
 
     <div class="form-row">
       <div class="field">
+        <label for="init_shares">시작 보유 주식수</label>
+        <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
+      </div>
+      <div class="field">
         <label for="sell_qty_pct_min">매도수량 하한(%)</label>
         <input type="number" name="sell_qty_pct_min" id="sell_qty_pct_min" min="1" value="{{ sell_qty_pct_min }}" required>
       </div>
@@ -293,13 +316,6 @@
       <div class="field">
         <label for="buy_qty_pct_max">매수수량 상한(%)</label>
         <input type="number" name="buy_qty_pct_max" id="buy_qty_pct_max" min="1" value="{{ buy_qty_pct_max }}" required>
-      </div>
-    </div>
-
-    <div class="form-row">
-      <div class="field">
-        <label for="init_shares">시작 보유 주식수</label>
-        <input type="number" name="init_shares" id="init_shares" min="0" value="{{ init_shares }}" required>
       </div>
       <button type="submit">히트맵 계산</button>
     </div>
@@ -325,16 +341,26 @@
         ({{ start_date }} ~ {{ end_date }}, {{ applied_period }}일)
       </h2>
       <div class="callout-grid">
-        <a class="callout best" href="{{ best_link }}">
+        <a class="callout {{ 'up' if best['profit_pct'] >= 0 else 'down' }}" href="{{ best_link }}">
           <div class="label">🔺 최대 수익률</div>
-          <div class="pct">{{ "{:+.2f}".format(best["profit_pct"]) }}%</div>
+          <div class="pct {{ 'up' if best['profit_pct'] >= 0 else 'down' }}">{{ "{:+.2f}".format(best["profit_pct"]) }}%</div>
           <div class="final">최종자산 {{ "{:,.0f}".format(best["total"]) }}</div>
+          <div class="final">매매 안 했을 때 {{ "{:,.0f}".format(hold_only_asset) }}</div>
+          <div class="final {{ 'up' if (best['total'] - hold_only_asset) >= 0 else 'down' }}">
+            보유 대비 {{ "{:+,.0f}".format(best["total"] - hold_only_asset) }}
+            ({{ "{:+.2f}".format((best["total"] - hold_only_asset) / hold_only_asset * 100) }}%)
+          </div>
           <div class="cond">매도 {{ best["sell_pct"] }}% ({{ best["sell_qty"] }}주) / 매수 {{ best["buy_pct"] }}% ({{ best["buy_qty"] }}주) / 매도횟수 {{ best["매도횟수"] }} / 매수횟수 {{ best["매수횟수"] }}</div>
         </a>
-        <a class="callout worst" href="{{ worst_link }}">
+        <a class="callout {{ 'up' if worst['profit_pct'] >= 0 else 'down' }}" href="{{ worst_link }}">
           <div class="label">🔻 최소 수익률</div>
-          <div class="pct">{{ "{:+.2f}".format(worst["profit_pct"]) }}%</div>
+          <div class="pct {{ 'up' if worst['profit_pct'] >= 0 else 'down' }}">{{ "{:+.2f}".format(worst["profit_pct"]) }}%</div>
           <div class="final">최종자산 {{ "{:,.0f}".format(worst["total"]) }}</div>
+          <div class="final">매매 안 했을 때 {{ "{:,.0f}".format(hold_only_asset) }}</div>
+          <div class="final {{ 'up' if (worst['total'] - hold_only_asset) >= 0 else 'down' }}">
+            보유 대비 {{ "{:+,.0f}".format(worst["total"] - hold_only_asset) }}
+            ({{ "{:+.2f}".format((worst["total"] - hold_only_asset) / hold_only_asset * 100) }}%)
+          </div>
           <div class="cond">매도 {{ worst["sell_pct"] }}% ({{ worst["sell_qty"] }}주) / 매수 {{ worst["buy_pct"] }}% ({{ worst["buy_qty"] }}주) / 매도횟수 {{ worst["매도횟수"] }} / 매수횟수 {{ worst["매수횟수"] }}</div>
         </a>
       </div>
@@ -360,7 +386,7 @@
                 <td><a href="{{ c.link }}">{{ c.sell_pct }}%</a></td>
                 <td><a href="{{ c.link }}">{{ c.buy_pct }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
-                <td class="up"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
               </tr>
               {% endfor %}
@@ -378,7 +404,7 @@
                 <td><a href="{{ c.link }}">{{ c.sell_pct }}%</a></td>
                 <td><a href="{{ c.link }}">{{ c.buy_pct }}%</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
-                <td class="down"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
+                <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>
               </tr>
               {% endfor %}
@@ -427,14 +453,14 @@
     </div>
 
     <div class="card">
-      <details class="ranked-details">
+      <details class="ranked-details" open>
         <summary>전체 수익률 보기 (max → min, {{ ranked|length }}개, 중복 수익률 제거)</summary>
         <p class="sub" style="margin: 8px 0 0 0; font-size: 12px;">
           시작 자산 {{ "{:,.0f}".format(initial_asset) }} · 매매 안 했을 때 최종 자산 {{ "{:,.0f}".format(hold_only_asset) }} · "보유 대비"는 그 자산과 비교한 차이(%)입니다.
         </p>
         <div class="ranked-scroll">
           <table class="rank-table">
-            <thead><tr><th>#</th><th>매도%</th><th>매수%</th><th>매도횟수</th><th>매수횟수</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
+            <thead><tr><th>#</th><th>매도%</th><th>매수%</th><th>매도횟수</th><th>매수횟수</th><th>현금</th><th>보유 주식수</th><th>주식 평가금액</th><th>최종자산</th><th>수익률</th><th>보유 대비(%)</th></tr></thead>
             <tbody>
               {% for c in ranked %}
               <tr class="{{ 'best-row' if loop.index == 1 }}{{ ' worst-row' if loop.index == ranked|length }}">
@@ -443,6 +469,9 @@
                 <td><a href="{{ c.link }}">{{ c.buy_pct }}%</a></td>
                 <td><a href="{{ c.link }}">{{ c['매도횟수'] }}</a></td>
                 <td><a href="{{ c.link }}">{{ c['매수횟수'] }}</a></td>
+                <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c['현금']) }}</a></td>
+                <td><a href="{{ c.link }}">{{ c['보유주식수'] }}</a></td>
+                <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c['주식평가금액']) }}</a></td>
                 <td><a href="{{ c.link }}">{{ "{:,.0f}".format(c.total) }}</a></td>
                 <td class="{{ 'up' if c.profit_pct >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c.profit_pct) }}%</a></td>
                 <td class="{{ 'up' if c['차이'] >= 0 else 'down' }}"><a href="{{ c.link }}">{{ "{:+.2f}".format(c['차이'] / hold_only_asset * 100) }}%</a></td>

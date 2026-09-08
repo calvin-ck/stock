@@ -58,6 +58,9 @@
   .nav .nav-group a.active { color: var(--text); font-weight: 700; text-decoration: underline; }
   h1 { font-size: 22px; margin-bottom: 4px; }
   p.sub { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; }
+  .sub-list { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; padding-left: 20px; }
+  .sub-list > li { margin-bottom: 4px; }
+  .sub-list ul { margin: 4px 0 4px 0; padding-left: 18px; }
 
   form {
     display: flex;
@@ -172,15 +175,25 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>🏆 전략별 최고 수익 비교</h1>
-  <p class="sub">
-    그리드 매매·이익 회수·일별 매매·일별 매매2·일별 매매3·자본 회수, 6개 전략의 히트맵을
-    각 히트맵 페이지의 <b>기본 스윕 범위와 고정값 그대로</b> 한 번씩 계산해서, 그 안에서 나온
-    <b>최고 수익률 조합</b>만 모아 한눈에 비교합니다(통합 히트맵 /heatmap3은 그리드 매매·
-    이익 회수의 일반화 버전이라 중복이므로 뺐습니다). 각 행을 클릭하면 그 조건 그대로 해당
-    전략 페이지로, 오른쪽 링크로는 그 히트맵 페이지로 이동할 수 있습니다. <b>스윕 상한(%)</b>
-    은 gap·수량·매수 트리거처럼 기본 상한이 50%였던 축들에 공통으로 적용됩니다(이미 100%가
-    자연스러운 이익회수 gap·매수 회복률 축은 그대로 둡니다).
-  </p>
+  <ul class="sub-list">
+    <li>트레일링 그리드 매매·트레일링 이익회수·일별 역추세 매매·트레일링 역추세 매매·
+      고정기준가 역추세 매매·자본 회수, 6개 전략의 히트맵을 각각의 <b>기본 스윕 범위와
+      고정값 그대로</b> 한 번씩 계산해서, 그 안에서 나온 <b>최고 수익률 조합</b>만 모아
+      한눈에 비교합니다.</li>
+    <li>작동 방식
+      <ul>
+        <li><b>스윕 상한(%)</b>은 gap·수량·매수 트리거처럼 기본 상한이 50%였던 축들에
+          공통으로 적용됩니다(이미 100%가 자연스러운 이익회수 회수율·매수 회복률 축은
+          그대로 둡니다).</li>
+      </ul>
+    </li>
+    <li>기능
+      <ul>
+        <li>각 행을 클릭하면 그 조건 그대로 해당 전략 페이지로, 오른쪽 링크로는 그
+          히트맵 페이지로 이동할 수 있습니다.</li>
+      </ul>
+    </li>
+  </ul>
 
   {% if codes %}
   <form method="get" action="/best" id="bestForm">
