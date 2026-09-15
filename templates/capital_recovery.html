@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>자본 회수 백테스트</title>
+<title>주식평가금액 유지 백테스트</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
@@ -196,18 +196,18 @@
 <body>
 <div class="wrap">
   {% include "_nav.html" %}
-  <h1>💰 자본 회수 백테스트</h1>
+  <h1>💰 주식평가금액 유지 백테스트</h1>
   <ul class="sub-list">
-    <li>기준가(비우면 첫날 종가) × 시작 보유 주식수로 정한 자본금을 기준으로, 주식
-      평가금액이 자본금을 넘으면 초과분을 매도하고 자본금 대비 일정 비율 이상 내려가면
-      부족분 일부를 매수하는 백테스트입니다.</li>
+    <li>주식평가금액을 유지하기 위한 전략. 기준가(비우면 첫날 종가) × 시작 보유
+      주식수로 정한 자본금을 기준으로, 주식 평가금액이 자본금을 넘으면 초과분을 매도하고
+      자본금 대비 일정 비율 이상 내려가면 부족분 일부를 매수합니다.</li>
     <li>작동 방식
       <ul>
-        <li>주식 평가금액이 자본금을 넘어서면(주가가 기준가보다 오르면) 넘어선 만큼만
-          정수 주식 단위로 팔아 현금으로 회수합니다.</li>
-        <li>주식 평가금액이 자본금 대비 <b>매수 트리거 gap%</b> 이상 내려가면, 부족분
-          (자본금 − 평가금액) 중 <b>매수 회복률%</b>만큼만 채우도록 매수를 시도합니다
-          (100%보다 크게 줘도 자본금을 넘어서 사지는 않습니다).</li>
+        <li>주식 평가금액이 자본금보다 <b>매매gap%</b> 이상 높으면, 초과분(평가금액−자본금)
+          중 <b>매매율%</b>를 현재가로 나눈 수량만큼 매도합니다.</li>
+        <li>주식 평가금액이 자본금보다 <b>매매gap%</b> 이상 낮으면, 부족분(자본금−평가금액)
+          중 <b>매매율%</b>를 현재가로 나눈 수량만큼 매수를 시도합니다.</li>
+        <li>gap% 미만으로 차이 나는 날은 아무 것도 하지 않습니다.</li>
         <li>기준가는 매매가 일어나도 갱신되지 않고 끝까지 고정됩니다(트레일링 아님). 매도·
           매수 조건이 동시에 성립할 수 없어 하루에 둘 다 일어나지는 않습니다.</li>
       </ul>
@@ -217,13 +217,6 @@
         <li><b>현금 부족해도 매수</b>를 체크하면 현금 잔고와 무관하게 계산된 수량을 그대로
           매수하고(현금이 마이너스가 될 수 있음), 체크하지 않으면(기본값) 쌓인 현금 범위
           내에서만 매수합니다.</li>
-      </ul>
-    </li>
-    <li>예
-      <ul>
-        <li>100주를 300원(자본금 30,000원)으로 시작했는데 320원이 되면, 초과분 2,000원
-          (=32,000−30,000)을 320원으로 나눈 6.25주 중 <b>6주만</b>(내림) 팔아 1,920원을
-          현금으로 회수하고 94주(30,080원)를 남깁니다.</li>
       </ul>
     </li>
   </ul>
@@ -253,12 +246,12 @@
         <input type="number" name="base_price" id="base_price" step="0.01" min="0.01" value="{{ base_price }}" placeholder="첫날 종가">
       </div>
       <div class="field">
-        <label for="buy_trigger_pct">매수 트리거 gap (%) <span class="hint">자본금 대비 평가금액 하락폭</span></label>
-        <input type="number" name="buy_trigger_pct" id="buy_trigger_pct" step="0.1" min="0.1" value="{{ buy_trigger_pct }}" required>
+        <label for="gap_pct">매매 gap (%)</label>
+        <input type="number" name="gap_pct" id="gap_pct" step="0.1" min="0.1" value="{{ gap_pct }}" required>
       </div>
       <div class="field">
-        <label for="buy_recover_pct">매수 회복률 (%) <span class="hint">부족분 중 채울 비율</span></label>
-        <input type="number" name="buy_recover_pct" id="buy_recover_pct" step="0.1" min="0.1" value="{{ buy_recover_pct }}" required>
+        <label for="ratio_pct">매매율 (%) <span class="hint">초과분/부족분 대비</span></label>
+        <input type="number" name="ratio_pct" id="ratio_pct" step="0.1" min="0.1" max="100" value="{{ ratio_pct }}" required>
       </div>
       <button type="submit">계산</button>
     </div>
@@ -280,8 +273,8 @@
     <div class="card">
       <h2>
         {{ code }} — 기준가 {{ "{:,.0f}".format(resolved_base_price) }} / 자본금
-        {{ "{:,.0f}".format(capital) }} / 매수 트리거 {{ buy_trigger_pct }}% / 매수 회복률
-        {{ buy_recover_pct }}% / 시작 {{ "{:,}".format(init_shares|int) }}주
+        {{ "{:,.0f}".format(capital) }} / 매매gap {{ gap_pct }}% / 매매율
+        {{ ratio_pct }}% / 시작 {{ "{:,}".format(init_shares|int) }}주
         ({{ start_date }} ~ {{ end_date }}, {{ applied_period }}일)
       </h2>
       {% if allow_negative_cash %}
@@ -320,6 +313,10 @@
         <div class="stat">
           <div class="label">주식 평가금액</div>
           <div class="value">{{ "{:,.0f}".format(summary["주식_평가금액"]) }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">시작 주가</div>
+          <div class="value">{{ "{:,.0f}".format(first_price) }}</div>
         </div>
         <div class="stat">
           <div class="label">마지막 주가</div>

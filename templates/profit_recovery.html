@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>트레일링 이익회수 백테스트</title>
+<title>이익회수 백테스트</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
@@ -182,11 +182,9 @@
 <body>
 <div class="wrap">
   {% include "_nav.html" %}
-  <h1>🏦 트레일링 이익회수 백테스트</h1>
+  <h1>🏦 이익회수 백테스트</h1>
   <ul class="sub-list">
-    <li>그리드 매수/매도는 전혀 하지 않고, 오직 "이익 회수" 이벤트만으로 동작하는
-      백테스트입니다. 주식을 계속 보유만 하다가 일정 비율 이상 벌었을 때만 일부를
-      현금화(적립)하는 전략을 테스트할 때 씁니다.</li>
+    <li>일정 비율 이상 벌었을 때 그 중 일부를 현금화(적립). 매매는 전혀 하지 않음.</li>
     <li>작동 방식
       <ul>
         <li>자본금(비우면 시작 자산)을 기준으로 삼습니다.</li>
@@ -304,6 +302,10 @@
           <div class="value">{{ "{:,.0f}".format(summary["적립금"]) }}</div>
         </div>
         <div class="stat">
+          <div class="label">시작 주가</div>
+          <div class="value">{{ "{:,.0f}".format(first_price) }}</div>
+        </div>
+        <div class="stat">
           <div class="label">마지막 주가</div>
           <div class="value">{{ "{:,.0f}".format(summary["주가"]) }}</div>
         </div>
@@ -352,6 +354,14 @@
         <label>
           <input type="checkbox" id="toggleReserve">
           <span class="swatch" style="background: #b8860b;"></span> 적립금 (y2)
+        </label>
+        <label>
+          <input type="checkbox" id="toggleHoldOnly" checked>
+          <span class="swatch" style="background: #9ca3af;"></span> 매매 안 했을 때 총자산 (y2)
+        </label>
+        <label>
+          <input type="checkbox" id="toggleCapital" checked>
+          <span class="swatch" style="background: #d97706;"></span> 자본금 (y2)
         </label>
       </div>
       <canvas id="tradeChart"></canvas>
@@ -403,7 +413,7 @@
 
     <script>
       const ctx = document.getElementById('tradeChart');
-      const ASSET_DATASET_INDEX = { total: 2, stockValue: 3, cash: 4, reserve: 5 };
+      const ASSET_DATASET_INDEX = { total: 2, stockValue: 3, cash: 4, reserve: 5, holdOnly: 6, capital: 7 };
 
       const tradeChart = new Chart(ctx, {
         type: 'line',
@@ -488,6 +498,34 @@
               hidden: true,
               order: 6,
             },
+            {
+              type: 'line',
+              label: '매매 안 했을 때 총자산',
+              data: {{ chart_hold_only | tojson }},
+              borderColor: '#9ca3af',
+              borderWidth: 1.5,
+              borderDash: [4, 3],
+              tension: 0.1,
+              fill: false,
+              pointRadius: 0,
+              yAxisID: 'y2',
+              hidden: false,
+              order: 7,
+            },
+            {
+              type: 'line',
+              label: '자본금',
+              data: {{ chart_capital | tojson }},
+              borderColor: '#d97706',
+              borderWidth: 1.5,
+              borderDash: [2, 2],
+              tension: 0,
+              fill: false,
+              pointRadius: 0,
+              yAxisID: 'y2',
+              hidden: false,
+              order: 8,
+            },
           ]
         },
         options: {
@@ -537,6 +575,8 @@
       bindAssetToggle('toggleStockValue', ASSET_DATASET_INDEX.stockValue);
       bindAssetToggle('toggleCash', ASSET_DATASET_INDEX.cash);
       bindAssetToggle('toggleReserve', ASSET_DATASET_INDEX.reserve);
+      bindAssetToggle('toggleHoldOnly', ASSET_DATASET_INDEX.holdOnly);
+      bindAssetToggle('toggleCapital', ASSET_DATASET_INDEX.capital);
     </script>
   {% endif %}
 </div>

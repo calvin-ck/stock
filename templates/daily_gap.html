@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>트레일링 역추세 매매 백테스트</title>
+<title>상승 매도 하락 매수 - min,max 기준 백테스트</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
@@ -195,10 +195,12 @@
 <body>
 <div class="wrap">
   {% include "_nav.html" %}
-  <h1>🔃 트레일링 역추세 매매 백테스트</h1>
+  <h1>🔃 상승 매도 하락 매수 - min,max 기준 백테스트</h1>
   <ul class="sub-list">
     <li>트레일링 고점(max)/저점(min)을 계속 추적하다가, <b>고점에서 gap%만큼 내려가면
-      매수</b>·<b>저점에서 gap%만큼 오르면 매도</b>하는 역추세 백테스트입니다.</li>
+      매수</b>·<b>저점에서 gap%만큼 오르면 매도</b>하는 역추세 백테스트입니다. "상승 매도
+      하락 매수 - 전날 기준"과 방향은 같지만, 기준점이 전날 종가가 아니라 트레일링
+      고점/저점입니다.</li>
     <li>작동 방식
       <ul>
         <li>시작 시 max/min은 첫날 종가로 시작합니다.</li>
@@ -316,6 +318,10 @@
           <div class="value">{{ "{:,.0f}".format(summary["주식_평가금액"]) }}</div>
         </div>
         <div class="stat">
+          <div class="label">시작 주가</div>
+          <div class="value">{{ "{:,.0f}".format(first_price) }}</div>
+        </div>
+        <div class="stat">
           <div class="label">마지막 주가</div>
           <div class="value">{{ "{:,.0f}".format(summary["주가"]) }}</div>
         </div>
@@ -365,6 +371,10 @@
         <label>
           <input type="checkbox" id="toggleHoldOnly" checked>
           <span class="swatch" style="background: #9ca3af;"></span> 매매 안 했을 때 총자산 (y2)
+        </label>
+        <label>
+          <input type="checkbox" id="toggleCapital" checked>
+          <span class="swatch" style="background: #d97706;"></span> 자본금 (y2)
         </label>
       </div>
       <canvas id="tradeChart"></canvas>
@@ -418,7 +428,7 @@
 
     <script>
       const ctx = document.getElementById('tradeChart');
-      const ASSET_DATASET_INDEX = { total: 3, stockValue: 4, cash: 5, holdOnly: 6 };
+      const ASSET_DATASET_INDEX = { total: 3, stockValue: 4, cash: 5, holdOnly: 6, capital: 7 };
 
       const tradeChart = new Chart(ctx, {
         type: 'line',
@@ -519,6 +529,20 @@
               hidden: false,
               order: 7,
             },
+            {
+              type: 'line',
+              label: '자본금',
+              data: {{ chart_capital | tojson }},
+              borderColor: '#d97706',
+              borderWidth: 1.5,
+              borderDash: [2, 2],
+              tension: 0,
+              fill: false,
+              pointRadius: 0,
+              yAxisID: 'y2',
+              hidden: false,
+              order: 8,
+            },
           ]
         },
         options: {
@@ -568,6 +592,7 @@
       bindAssetToggle('toggleStockValue', ASSET_DATASET_INDEX.stockValue);
       bindAssetToggle('toggleCash', ASSET_DATASET_INDEX.cash);
       bindAssetToggle('toggleHoldOnly', ASSET_DATASET_INDEX.holdOnly);
+      bindAssetToggle('toggleCapital', ASSET_DATASET_INDEX.capital);
     </script>
   {% endif %}
 </div>

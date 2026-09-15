@@ -84,6 +84,21 @@
   }
   form select { min-width: 180px; }
   form input[type="number"] { width: 110px; }
+  .radio-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+    height: 41px;
+  }
+  .radio-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .radio-option input[type="radio"] { width: auto; cursor: pointer; }
   form button {
     padding: 10px 18px;
     border: none;
@@ -175,18 +190,23 @@
   {% include "_nav.html" %}
   <h1>📆 전략별 기간 비교 히트맵</h1>
   <ul class="sub-list">
-    <li>6개 전략(트레일링 그리드 매매, 트레일링 이익회수, 일별 역추세 매매, 트레일링
-      역추세 매매, 고정기준가 역추세 매매, 자본 회수) × 6개 기간(180/90/60/30/14/7일)의
-      최고 수익률을 한 번에 비교하는 히트맵입니다.</li>
+    <li>6개 전략(하락 매도 상승 매수(익절), 이익회수, 주식평가금액 유지, 상승 매도 하락
+      매수 - 전날 기준, 상승 매도 하락 매수 - min,max 기준, 상승 매도 하락 매수 - 매매시
+      기준) × 기간별 최고 수익률을 한 번에
+      비교하는 히트맵입니다. 기간은 180/90/60/30/14/7일 중 <b>기준 기간</b>으로 고른
+      값 이하만 분석합니다.</li>
     <li>작동 방식
       <ul>
         <li>각 전략은 <code>/best</code>와 동일하게 각자의 기본 스윕 범위로 계산합니다.</li>
-        <li>종료일은 모든 기간에 공통이며(비우면 오늘), 기간마다 따로 데이터를 받지
-          않고 가장 긴 기간(180일)의 데이터를 한 번만 받아 필요한 만큼씩 잘라 씁니다.</li>
+        <li>종료일은 분석 대상 기간 모두에 공통이며(비우면 오늘), 기간마다 따로 데이터를
+          받지 않고 그중 가장 긴 기간의 데이터를 한 번만 받아 필요한 만큼씩 잘라 씁니다.</li>
       </ul>
     </li>
     <li>기능
       <ul>
+        <li><b>기준 기간</b> 라디오 버튼(기본 90일)으로 180/90/60/30/14/7일 중 하나를
+          고르면, 그 값 이하인 기간들만 열로 남아 계산·표시됩니다(예: 30일을 고르면
+          30/14/7일만 계산합니다) — 분석 범위를 좁힐수록 계산도 그만큼 빨라집니다.</li>
         <li>기간(맨 위 열 머리글)을 클릭하면 그 기간의 6개 전략을 한 화면에서 비교하는
           <code>/best</code> 페이지로 이동합니다.</li>
         <li>각 칸을 클릭하면 그 조합 그대로 해당 전략의 실제 백테스트 페이지로 이동해
@@ -215,6 +235,20 @@
       <div class="field">
         <label for="end_date">종료일 <span class="hint">비우면 오늘, 6개 기간 공통</span></label>
         <input type="date" name="end_date" id="end_date" value="{{ end_date }}">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="field">
+        <label>기준 기간 <span class="hint">이 기간 이하만 분석</span></label>
+        <div class="radio-group">
+          {% for p in all_periods %}
+          <label class="radio-option">
+            <input type="radio" name="max_period" value="{{ p }}" {% if p|string == max_period %}checked{% endif %}>
+            {{ p }}일
+          </label>
+          {% endfor %}
+        </div>
       </div>
     </div>
 

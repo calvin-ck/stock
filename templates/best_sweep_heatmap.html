@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>전략별 스윕 상한 비교 히트맵</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
     --up: #d24343;
@@ -161,6 +162,7 @@
     border-radius: 5px;
     background: linear-gradient(to right, var(--down), #f5f6f8, var(--up));
   }
+  .chart-card canvas { max-height: 380px; }
 </style>
 </head>
 <body>
@@ -168,16 +170,16 @@
   {% include "_nav.html" %}
   <h1>🎯 전략별 스윕 상한 비교 히트맵</h1>
   <ul class="sub-list">
-    <li>6개 전략(트레일링 그리드 매매, 트레일링 이익회수, 일별 역추세 매매, 트레일링
-      역추세 매매, 고정기준가 역추세 매매, 자본 회수)이 <b>스윕 상한(%)</b>을 넓혀갈
+    <li>6개 전략(하락 매도 상승 매수(익절), 이익회수, 주식평가금액 유지, 상승 매도 하락
+      매수 - 전날 기준, 상승 매도 하락 매수 - min,max 기준, 상승 매도 하락 매수 - 매매시
+      기준)이 <b>스윕 상한(%)</b>을 넓혀갈
       때, 그 안에서 나오는 최고 수익률이 어떻게 바뀌는지 11개 지점(1, 10, 20, ...,
       100)으로 한 번에 비교하는 히트맵입니다.</li>
     <li>작동 방식
       <ul>
         <li>스윕 상한 N에서의 최고 수익률은 "gap·수량·매수 트리거 축을 1~N까지만
-          스윕했을 때"의 최고값과 같습니다. 이미 100%가 자연스러운 축(이익회수
-          회수율·자본회수 매수 회복률)은 스윕 상한과 무관하게 항상 1~100 전체를
-          봅니다.</li>
+          스윕했을 때"의 최고값과 같습니다. 이미 100%가 자연스러운 축(이익회수 회수율·
+          주식평가금액 유지의 매매율)은 스윕 상한과 무관하게 항상 1~100 전체를 봅니다.</li>
         <li>전략마다 1~100 전체를 한 번만 계산해두고, 그 안에서 표시할 11개 N에
           대한 최댓값만 뽑아 쓰기 때문에 전략당 다시 계산하지 않습니다.</li>
       </ul>
@@ -191,6 +193,9 @@
         <li>맨 아래 <b>🤚 매도/매수 없음(단순 보유)</b> 행은 그 기간 동안 아무 매매 없이
           그냥 들고만 있었을 때의 수익률입니다. 스윕 상한과 무관하게 값이 같아
           참고용으로만 넣었고, 클릭 링크는 없습니다.</li>
+        <li>히트맵 아래 꺾은선 그래프는 같은 데이터를 스윕 상한(%)을 x축, 최고
+          수익률(%)을 y축으로 그려 전략별 추이를 한눈에 비교할 수 있게 보여줍니다
+          (단순 보유는 점선으로 표시).</li>
       </ul>
     </li>
   </ul>
@@ -307,6 +312,70 @@
         <span>수익</span>
       </div>
     </div>
+
+    <div class="card chart-card">
+      <h2>스윕 상한별 최고 수익률 추이</h2>
+      <canvas id="sweepLineChart"></canvas>
+    </div>
+    <script>
+      (function () {
+        var STRATEGY_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300'];
+        var labels = {{ sweep_values | tojson }};
+        var rows = {{ rows | tojson }};
+        var holdRow = {{ hold_row | tojson }};
+
+        var datasets = rows.map(function (row, i) {
+          var color = STRATEGY_COLORS[i % STRATEGY_COLORS.length];
+          return {
+            label: row.icon + ' ' + row.label,
+            data: row.cells.map(function (c) { return c.profit_pct; }),
+            borderColor: color,
+            backgroundColor: color,
+            tension: 0.2,
+            pointRadius: 3,
+            borderWidth: 2,
+          };
+        });
+
+        if (holdRow) {
+          datasets.push({
+            label: holdRow.icon + ' ' + holdRow.label,
+            data: holdRow.cells.map(function (c) { return c.profit_pct; }),
+            borderColor: '#898781',
+            backgroundColor: '#898781',
+            borderDash: [6, 4],
+            tension: 0,
+            pointRadius: 0,
+            borderWidth: 1.5,
+          });
+        }
+
+        new Chart(document.getElementById('sweepLineChart'), {
+          type: 'line',
+          data: { labels: labels, datasets: datasets },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: { display: true, position: 'bottom' },
+              tooltip: {
+                callbacks: {
+                  label: function (ctx) {
+                    return ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2) + '%';
+                  },
+                },
+              },
+            },
+            scales: {
+              x: { title: { display: true, text: '스윕 상한(%)' } },
+              y: {
+                title: { display: true, text: '최고 수익률(%)' },
+                ticks: { callback: function (v) { return v + '%'; } },
+              },
+            },
+          },
+        });
+      })();
+    </script>
   {% endif %}
 </div>
 </body>
