@@ -1,0 +1,38 @@
+{% macro desc_toggle() %}
+<style>
+  .desc-toggle-wrap { margin-bottom: 24px; }
+  .desc-toggle-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 4px 12px;
+    cursor: pointer;
+  }
+  .desc-toggle-btn:hover { color: var(--text); border-color: var(--muted); }
+  .desc-toggle-body { margin-top: 10px; }
+</style>
+<div class="desc-toggle-wrap">
+  <button type="button" class="desc-toggle-btn">설명 보기 ▸</button>
+  <div class="desc-toggle-body" hidden>
+    {{ caller() }}
+  </div>
+</div>
+<script>
+(function () {
+  var wrap = document.currentScript.previousElementSibling;
+  var btn = wrap.querySelector('.desc-toggle-btn');
+  var body = wrap.querySelector('.desc-toggle-body');
+  btn.addEventListener('click', function () {
+    if (body.hasAttribute('hidden')) {
+      body.removeAttribute('hidden');
+      btn.textContent = '설명 숨기기 ▾';
+    } else {
+      body.setAttribute('hidden', '');
+      btn.textContent = '설명 보기 ▸';
+    }
+  });
+})();
+</script>
+{% endmacro %}

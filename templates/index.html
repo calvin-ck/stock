@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -211,11 +212,13 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>📈 주식 시세 조회</h1>
+  {% call macros.desc_toggle() %}
   <p class="sub">
     종목 코드와 종료일(없으면 오늘) + 시작일 또는 기간을 입력하세요. 조회하면 일별 시세와
     함께 상승/하락 비율, 연속 상승·하락 일수 분포, 등락률 분포 등 가격 통계도 함께
     보여줍니다. 예: 삼성전자 005930, 카카오 035720
   </p>
+  {% endcall %}
 
   <form method="get" action="/">
     <div class="field field-code">

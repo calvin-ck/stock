@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -198,6 +199,7 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>🔲 하락 매도 상승 매수(익절) 백테스트</h1>
+  {% call macros.desc_toggle() %}
   <ul class="sub-list">
     <li>고점(max)에서 gap%만큼 떨어지면 정해진 수량(%)만큼 매도, 저점(min)에서 gap%만큼
       오르면 정해진 수량(%)만큼 매수.</li>
@@ -222,6 +224,7 @@
       </ul>
     </li>
   </ul>
+  {% endcall %}
 
   {% if codes %}
   <form method="get" action="/grid_trade" id="gridForm">

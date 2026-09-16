@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -171,6 +172,7 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>🎯 수량별 최고 수익률 비교 히트맵</h1>
+  {% call macros.desc_toggle() %}
   <ul class="sub-list">
     <li>6개 전략(하락 매도 상승 매수(익절), 이익회수, 주식평가금액 유지, 상승 매도 하락
       매수 - 전날 기준, 상승 매도 하락 매수 - min,max 기준, 상승 매도 하락 매수 - 매매시
@@ -201,6 +203,7 @@
       </ul>
     </li>
   </ul>
+  {% endcall %}
 
   {% if codes %}
   <form method="get" action="/best_sweep_heatmap" id="bestSweepForm">

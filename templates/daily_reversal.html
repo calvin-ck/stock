@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -199,6 +200,7 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>🔄 상승 매도 하락 매수 - 전날 기준 백테스트</h1>
+  {% call macros.desc_toggle() %}
   <ul class="sub-list">
     <li><b>전날 종가보다 gap%만큼 오르면 매도</b>·<b>내리면 매수</b>. gap 미만으로
       움직인 날은 아무 것도 안 함.</li>
@@ -219,6 +221,7 @@
       </ul>
     </li>
   </ul>
+  {% endcall %}
 
   {% if codes %}
   <form method="get" action="/daily_reversal" id="dailyForm">

@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -199,6 +200,7 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>💰 주식평가금액 유지 백테스트</h1>
+  {% call macros.desc_toggle() %}
   <ul class="sub-list">
     <li>주식평가금액을 유지하기 위한 전략. 기준가(비우면 첫날 종가) × 시작 보유
       주식수로 정한 자본금을 기준으로, 주식 평가금액이 자본금을 넘으면 초과분을 매도하고
@@ -222,6 +224,7 @@
       </ul>
     </li>
   </ul>
+  {% endcall %}
 
   {% if codes %}
   <form method="get" action="/capital_recovery" id="recoveryForm">

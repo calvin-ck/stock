@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -258,6 +259,7 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>🔄🔥 상승 매도 하락 매수 - 전날 기준 히트맵</h1>
+  {% call macros.desc_toggle() %}
   <ul class="sub-list">
     <li>"상승 매도 하락 매수 - 전날 기준"(전날보다 gap%만큼 오르면 매도, 내리면 매수)를 <b>gap%</b> ×
       <b>매수수량%</b> 조합별로 스윕해서 수익률을 한 번에 비교하는 히트맵입니다.</li>
@@ -276,6 +278,7 @@
       </ul>
     </li>
   </ul>
+  {% endcall %}
 
   {% if codes %}
   <form method="get" action="/daily_reversal_heatmap" id="heatmapForm">

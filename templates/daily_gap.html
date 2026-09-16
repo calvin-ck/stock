@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -198,6 +199,7 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>🔃 상승 매도 하락 매수 - min,max 기준 백테스트</h1>
+  {% call macros.desc_toggle() %}
   <ul class="sub-list">
     <li>트레일링 고점(max)/저점(min)을 계속 추적하다가, <b>고점에서 gap%만큼 내려가면
       매수</b>·<b>저점에서 gap%만큼 오르면 매도</b>하는 역추세 백테스트입니다. "상승 매도
@@ -223,6 +225,7 @@
       </ul>
     </li>
   </ul>
+  {% endcall %}
 
   {% if codes %}
   <form method="get" action="/daily_gap" id="daily2Form">

@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -259,6 +260,7 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>💰🔥 주식평가금액 유지 히트맵</h1>
+  {% call macros.desc_toggle() %}
   <ul class="sub-list">
     <li>"주식평가금액 유지"(주식 평가금액이 자본금과 매매gap% 이상 차이 날 때만 매매해서
       평가금액을 자본금 근처로 유지하는 전략)를 <b>매매gap%</b> × <b>매매율%</b> 조합별로
@@ -279,6 +281,7 @@
       </ul>
     </li>
   </ul>
+  {% endcall %}
 
   {% if codes %}
   <form method="get" action="/capital_recovery_heatmap" id="heatmapForm">

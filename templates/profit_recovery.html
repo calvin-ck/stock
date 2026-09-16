@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -185,6 +186,7 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>🏦 이익회수 백테스트</h1>
+  {% call macros.desc_toggle() %}
   <ul class="sub-list">
     <li>일정 비율 이상 벌었을 때 그 중 일부를 현금화(적립). 매매는 전혀 하지 않음.</li>
     <li>작동 방식
@@ -219,6 +221,7 @@
       </ul>
     </li>
   </ul>
+  {% endcall %}
 
   {% if codes %}
   <form method="get" action="/profit_recovery" id="gridRecoverForm">

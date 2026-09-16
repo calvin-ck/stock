@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -259,6 +260,7 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>🔲🔥 하락 매도 상승 매수(익절) 히트맵</h1>
+  {% call macros.desc_toggle() %}
   <ul class="sub-list">
     <li>"하락 매도 상승 매수(익절)"(고점에서 gap%만큼 떨어지면 매도, 저점에서 gap%만큼 오르면
       매수)를 <b>매매gap%</b> × <b>매매 수량%</b> 조합별로 스윕해서 수익률을 한 번에 비교하는
@@ -279,6 +281,7 @@
       </ul>
     </li>
   </ul>
+  {% endcall %}
 
   {% if codes %}
   <form method="get" action="/grid_trade_heatmap" id="heatmapForm">

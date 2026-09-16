@@ -1,3 +1,4 @@
+{% import "_macros.html" as macros %}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -199,6 +200,7 @@
 <div class="wrap">
   {% include "_nav.html" %}
   <h1>📌 상승 매도 하락 매수 - 매매시 기준 백테스트</h1>
+  {% call macros.desc_toggle() %}
   <ul class="sub-list">
     <li>정적인 <b>기준가</b>를 기준으로, <b>기준가에서 gap% 이상 오르면 매도</b>·
       <b>기준가에서 gap% 이상 내리면 매수</b>하는 역추세 백테스트입니다.</li>
@@ -230,6 +232,7 @@
       </ul>
     </li>
   </ul>
+  {% endcall %}
 
   {% if codes %}
   <form method="get" action="/daily_reference" id="daily3Form">
