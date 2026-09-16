@@ -2694,6 +2694,8 @@ def best_heatmap():
         "fetch_note": None,
         "rows": None,
         "hold_row": None,
+        "chart_labels": None,
+        "chart_prices": None,
     }
 
     if code:
@@ -2722,6 +2724,8 @@ def best_heatmap():
             context["fetch_note"] = fetch_note
 
             sorted_df = df.sort_values("날짜")
+            context["chart_labels"] = sorted_df["날짜"].dt.strftime("%Y-%m-%d").tolist()
+            context["chart_prices"] = sorted_df["종가"].tolist()
 
             # 기간마다 따로 조회하지 않고, 선택한 기준 기간 중 가장 긴 데이터를 날짜로
             # 잘라 재사용한다.

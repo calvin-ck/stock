@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%93%88</text></svg>">
 <title>기간별 비교 히트맵</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
     --up: #d24343;
@@ -195,6 +196,7 @@
     border-radius: 5px;
     background: linear-gradient(to right, var(--down), #f5f6f8, var(--up));
   }
+  canvas { max-height: 320px; }
 </style>
 </head>
 <body>
@@ -231,6 +233,8 @@
           있어서입니다.</li>
         <li>맨 아래 <b>🤚 매도/매수 없음(단순 보유)</b> 행은 그 기간 동안 아무 매매 없이
           그냥 들고만 있었을 때의 수익률로, 전략들의 성과를 비교할 기준선입니다.</li>
+        <li>히트맵 아래 <b>종가 추이</b> 그래프는 계산에 쓰인 가장 긴 기간(기준 기간)
+          동안의 일별 종가 흐름을 보여줍니다.</li>
       </ul>
     </li>
   </ul>
@@ -363,6 +367,35 @@
         <span style="margin-left: 12px;">🤚 매도/매수 없음 = 그냥 들고만 있었을 때(단순 보유) 수익률, 전략 비교 기준선</span>
       </div>
     </div>
+
+    <div class="card">
+      <h2>종가 추이 ({{ chart_labels[0] }} ~ {{ chart_labels[-1] }})</h2>
+      <canvas id="priceChart"></canvas>
+    </div>
+    <script>
+      new Chart(document.getElementById('priceChart'), {
+        type: 'line',
+        data: {
+          labels: {{ chart_labels | tojson }},
+          datasets: [{
+            label: '종가',
+            data: {{ chart_prices | tojson }},
+            borderColor: '#d24343',
+            backgroundColor: 'rgba(210,67,67,0.08)',
+            tension: 0.25,
+            fill: true,
+            pointRadius: 2,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { ticks: { callback: (v) => v.toLocaleString() } }
+          }
+        }
+      });
+    </script>
     <script>
       (function () {
         var group = document.getElementById('viewModeGroup');
