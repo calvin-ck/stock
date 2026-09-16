@@ -2696,6 +2696,7 @@ def best_heatmap():
         "hold_row": None,
         "chart_labels": None,
         "chart_prices": None,
+        "chart_period_markers": None,
     }
 
     if code:
@@ -2731,9 +2732,13 @@ def best_heatmap():
             # 잘라 재사용한다.
             best_by_period = {}
             hold_by_period = {}  # 매도/매수 없이 그냥 들고만 있었을 때(단순 보유) 수익률
+            chart_period_markers = []  # 종가 추이 그래프에 기간별 시작 지점 세로선을 그릴 위치(인덱스)
             for period in periods:
                 period_start = end_date - timedelta(days=period)
                 sub_df = sorted_df[sorted_df["날짜"] >= pd.Timestamp(period_start)]
+                mask = sorted_df["날짜"] >= pd.Timestamp(period_start)
+                if mask.any():
+                    chart_period_markers.append({"period": period, "index": int(mask.values.argmax())})
                 if len(sub_df) < 2:
                     best_by_period[period] = None
                     hold_by_period[period] = None
@@ -2831,6 +2836,7 @@ def best_heatmap():
 
             context["rows"] = rows
             context["hold_row"] = {"icon": "🤚", "label": "매도/매수 없음 (단순 보유)", "cells": hold_cells}
+            context["chart_period_markers"] = chart_period_markers
 
         except ValueError as e:
             context["error"] = f"입력 오류: {e}"
