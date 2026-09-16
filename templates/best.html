@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%93%88</text></svg>">
-<title>전략별 최고 수익 비교</title>
+<title>최고 수익 비교</title>
 <style>
   :root {
     --up: #d24343;
@@ -176,7 +176,7 @@
 <body>
 <div class="wrap">
   {% include "_nav.html" %}
-  <h1>🏆 전략별 최고 수익 비교</h1>
+  <h1>🏆 최고 수익 비교</h1>
   <ul class="sub-list">
     <li>하락 매도 상승 매수(익절)·이익회수·주식평가금액 유지·상승 매도 하락 매수 - 전날
       기준·상승 매도 하락 매수 - min,max 기준·상승 매도 하락 매수 - 매매시 기준, 6개
@@ -185,9 +185,10 @@
       한눈에 비교합니다.</li>
     <li>작동 방식
       <ul>
-        <li><b>스윕 상한(%)</b>은 gap·수량·매수 트리거처럼 기본 상한이 50%였던 축들에
-          공통으로 적용됩니다(이미 100%가 자연스러운 이익회수 회수율·매수 회복률 축은
-          그대로 둡니다).</li>
+        <li><b>스윕 상한(%)</b>(기본값 100)은 gap·수량·매수 트리거처럼 자연스러운 상한이
+          없는 축들에 공통으로 적용됩니다(이익회수 회수율·주식평가금액 유지 매매율처럼
+          이미 100%가 자연스러운 상한인 축은 스윕 상한과 무관하게 항상 1~100 전체를
+          봅니다).</li>
       </ul>
     </li>
     <li>기능

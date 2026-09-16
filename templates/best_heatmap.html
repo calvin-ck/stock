@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>%F0%9F%93%88</text></svg>">
-<title>전략별 기간 비교 히트맵</title>
+<title>기간별 비교 히트맵</title>
 <style>
   :root {
     --up: #d24343;
@@ -143,10 +143,11 @@
   .card h2 { font-size: 16px; margin: 0 0 12px 0; }
 
   .matrix-scroll { overflow-x: auto; }
-  table.matrix { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.matrix { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
   table.matrix th, table.matrix td {
     padding: 10px 12px; text-align: center; border: 1px solid var(--border); white-space: nowrap;
   }
+  table.matrix thead th:first-child { width: 280px; }
   table.matrix thead th {
     background: var(--bg); color: var(--muted); font-weight: 600; font-size: 12px;
   }
@@ -158,7 +159,7 @@
   }
   table.matrix tbody th {
     text-align: left; background: var(--bg); color: var(--text); font-weight: 600;
-    display: flex; align-items: center; gap: 6px;
+    display: flex; align-items: center; gap: 6px; white-space: normal;
   }
   table.matrix td a {
     display: block; color: inherit; text-decoration: none;
@@ -170,7 +171,16 @@
     border-top: 2px solid var(--text);
   }
   table.matrix tr.hold-row th { font-style: italic; }
-  table.matrix tr.hold-row td span { display: block; font-weight: 700; }
+  table.matrix tr.hold-row td > span { display: block; font-weight: 700; }
+  table.matrix tr.hold-row .cell-vs { display: none; }
+
+  table.matrix.view-profit .cell-vs { display: none; }
+  table.matrix.view-vshold .cell-pct { display: none; }
+  table.matrix.view-vshold .cell-vs {
+    display: block; font-size: inherit; font-weight: 700; opacity: 1;
+  }
+  table.matrix.view-vshold .cell-vs .paren { display: none; }
+  table.matrix.view-vshold tr.hold-row .cell-vs { display: block; }
   .legend {
     display: flex;
     align-items: center;
@@ -190,7 +200,7 @@
 <body>
 <div class="wrap">
   {% include "_nav.html" %}
-  <h1>📆 전략별 기간 비교 히트맵</h1>
+  <h1>📆 기간별 비교 히트맵</h1>
   <ul class="sub-list">
     <li>6개 전략(하락 매도 상승 매수(익절), 이익회수, 주식평가금액 유지, 상승 매도 하락
       매수 - 전날 기준, 상승 매도 하락 매수 - min,max 기준, 상승 매도 하락 매수 - 매매시
@@ -214,6 +224,11 @@
         <li>각 칸을 클릭하면 그 조합 그대로 해당 전략의 실제 백테스트 페이지로 이동해
           매매일지 등 세부 내용을 볼 수 있습니다. 괄호 안의 값은 그 기간 단순 보유
           최종자산과 비교한 차이(%)입니다.</li>
+        <li>표 위 라디오 버튼(둘 다 보기/수익률만 보기/단순보유 대비 수익률 보기)으로
+          어느 값을 볼지 고를 수 있습니다. <b>단순보유 대비 수익률</b>을 고르면 칸 색도
+          그 값의 증감(양수면 붉은색, 음수면 푸른색)에 맞게 다시 칠해집니다 — 수익률
+          자체는 양수(+)인데 단순보유보다는 못한(-) 경우처럼 두 값의 부호가 다를 수
+          있어서입니다.</li>
         <li>맨 아래 <b>🤚 매도/매수 없음(단순 보유)</b> 행은 그 기간 동안 아무 매매 없이
           그냥 들고만 있었을 때의 수익률로, 전략들의 성과를 비교할 기준선입니다.</li>
       </ul>
@@ -282,13 +297,24 @@
   {% if rows %}
     <div class="card">
       <h2>{{ code }} — 종료일 {{ end_date }} 기준, 시작 {{ "{:,}".format(init_shares|int) }}주</h2>
+      <div class="radio-group" id="viewModeGroup" style="height: auto; margin-bottom: 12px;">
+        <label class="radio-option">
+          <input type="radio" name="view_mode" value="both" checked> 둘 다 보기
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="view_mode" value="profit"> 수익률만 보기
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="view_mode" value="vshold"> 단순보유 대비 수익률 보기
+        </label>
+      </div>
       <div class="matrix-scroll">
-        <table class="matrix">
+        <table class="matrix" id="bestHeatmapMatrix">
           <thead>
             <tr>
               <th>전략 \ 기간</th>
               {% for pl in period_links %}
-              <th><a href="{{ pl.link }}" title="{{ pl.period }}일 — 전략별 최고 수익 비교로 이동">{{ pl.period }}일</a></th>
+              <th><a href="{{ pl.link }}" title="{{ pl.period }}일 — 최고 수익 비교로 이동">{{ pl.period }}일</a></th>
               {% endfor %}
             </tr>
           </thead>
@@ -298,9 +324,9 @@
               <th><span>{{ row.icon }}</span> {{ row.label }}</th>
               {% for cell in row.cells %}
               {% if cell.profit_pct is not none %}
-              <td style="background-color: {{ cell.color }};">
+              <td data-color-profit="{{ cell.color }}" data-color-vshold="{{ cell.vs_hold_color }}" style="background-color: {{ cell.color }};">
                 <a href="{{ cell.link }}" title="최종자산 {{ '{:,.0f}'.format(cell.total) }}">
-                  <span class="cell-pct">{{ "{:+.2f}".format(cell.profit_pct) }}%</span>{% if cell.vs_hold_pct is not none %} <span class="cell-vs">({{ "{:+.2f}".format(cell.vs_hold_pct) }}%)</span>{% endif %}
+                  <span class="cell-pct">{{ "{:+.2f}".format(cell.profit_pct) }}%</span>{% if cell.vs_hold_pct is not none %} <span class="cell-vs"><span class="paren">(</span>{{ "{:+.2f}".format(cell.vs_hold_pct) }}%<span class="paren">)</span></span>{% endif %}
                 </a>
               </td>
               {% else %}
@@ -314,10 +340,11 @@
               <th><span>{{ hold_row.icon }}</span> {{ hold_row.label }}</th>
               {% for cell in hold_row.cells %}
               {% if cell.profit_pct is not none %}
-              <td style="background-color: {{ cell.color }};">
+              <td data-color-profit="{{ cell.color }}" data-color-vshold="{{ cell.vs_hold_color }}" style="background-color: {{ cell.color }};">
                 <span class="cell-pct" title="최종자산 {{ '{:,.0f}'.format(cell.total) }}">
                   {{ "{:+.2f}".format(cell.profit_pct) }}%
                 </span>
+                <span class="cell-vs" title="단순 보유는 자기 자신과 비교하므로 항상 0%"><span class="paren">(</span>{{ "{:+.2f}".format(cell.vs_hold_pct) }}%<span class="paren">)</span></span>
               </td>
               {% else %}
               <td class="na">N/A</td>
@@ -336,6 +363,28 @@
         <span style="margin-left: 12px;">🤚 매도/매수 없음 = 그냥 들고만 있었을 때(단순 보유) 수익률, 전략 비교 기준선</span>
       </div>
     </div>
+    <script>
+      (function () {
+        var group = document.getElementById('viewModeGroup');
+        var table = document.getElementById('bestHeatmapMatrix');
+        if (!group || !table) return;
+
+        function applyMode(mode) {
+          table.classList.remove('view-both', 'view-profit', 'view-vshold');
+          table.classList.add('view-' + mode);
+          var colorAttr = mode === 'vshold' ? 'colorVshold' : 'colorProfit';
+          var cells = table.querySelectorAll('td[data-color-profit]');
+          for (var i = 0; i < cells.length; i++) {
+            cells[i].style.backgroundColor = cells[i].dataset[colorAttr];
+          }
+        }
+
+        group.addEventListener('change', function (e) {
+          if (e.target.name === 'view_mode') applyMode(e.target.value);
+        });
+        applyMode('both');
+      })();
+    </script>
   {% endif %}
 </div>
 </body>

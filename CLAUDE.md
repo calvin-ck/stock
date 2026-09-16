@@ -87,5 +87,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   최고 수익률 조합만 모아 전략끼리 비교한다.
 - **`/best_heatmap`**: `/best`의 6개 전략 × 6개 기간(180/90/60/30/14/7일)의 최고 수익률을
   한 번에 비교하는 히트맵.
-- **`/best_sweep_heatmap`**: 6개 전략 × 스윕 상한(gap·수량·매수 트리거 축) 11개 지점
-  (1, 10, 20, ..., 100%)의 최고 수익률을 한 번에 비교하는 히트맵.
+- **`/best_sweep_heatmap`**: 6개 전략 × 수량류 축(qty_pct·회수율·매매율) 11개 지점
+  (1, 10, 20, ..., 100%)의 최고 수익률을 한 번에 비교하는 히트맵. 각 칸은 그 수량값을
+  고정하고 gap류 축(gap·profit_gap·gap_pct)을 1~100% 전체로 스윕했을 때 나온 최고
+  수익률이다.

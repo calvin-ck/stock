@@ -293,32 +293,26 @@
           <div class="value">{{ "{:,.0f}".format(initial_asset) }}</div>
         </div>
         <div class="stat">
-          <div class="label">최종 자산 (total)</div>
+          <div class="label">최종 자산</div>
           <div class="value">{{ "{:,.0f}".format(summary["total"]) }}</div>
-        </div>
-        <div class="stat">
-          <div class="label">수익</div>
-          <div class="value {{ 'up' if profit >= 0 else 'down' }}">
-            {{ "{:+,.0f}".format(profit) }}
-          </div>
-        </div>
-        <div class="stat">
-          <div class="label">수익률</div>
-          <div class="value {{ 'up' if profit_pct >= 0 else 'down' }}">
-            {{ "{:+.2f}".format(profit_pct) }}%
-          </div>
-        </div>
-      </div>
-
-      <div class="summary-grid">
-        <div class="stat">
-          <div class="label">현금</div>
-          <div class="value">{{ "{:,.0f}".format(summary["현금"]) }}</div>
         </div>
         <div class="stat">
           <div class="label">주식 평가금액</div>
           <div class="value">{{ "{:,.0f}".format(summary["주식_평가금액"]) }}</div>
         </div>
+        <div class="stat">
+          <div class="label">현금</div>
+          <div class="value">{{ "{:,.0f}".format(summary["현금"]) }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">수익 (수익률)</div>
+          <div class="value {{ 'up' if profit >= 0 else 'down' }}">
+            {{ "{:+,.0f}".format(profit) }} ({{ "{:+.2f}".format(profit_pct) }}%)
+          </div>
+        </div>
+      </div>
+
+      <div class="summary-grid">
         <div class="stat">
           <div class="label">시작 주가</div>
           <div class="value">{{ "{:,.0f}".format(first_price) }}</div>
@@ -339,13 +333,15 @@
 
       <div class="summary-grid">
         <div class="stat">
-          <div class="label">매매 안 했을 때 최종 자산</div>
-          <div class="value">{{ "{:,.0f}".format(hold_only_asset) }}</div>
+          <div class="label">단순보유 최종 자산 (수익률)</div>
+          <div class="value {{ 'up' if hold_only_pct >= 0 else 'down' }}">
+            {{ "{:,.0f}".format(hold_only_asset) }} ({{ "{:+.2f}".format(hold_only_pct) }}%)
+          </div>
         </div>
         <div class="stat">
-          <div class="label">매매 전략 대비 (vs 단순보유)</div>
+          <div class="label">단순보유 대비 (수익률)</div>
           <div class="value {{ 'up' if vs_hold >= 0 else 'down' }}">
-            {{ "{:+,.0f}".format(vs_hold) }}
+            {{ "{:+,.0f}".format(vs_hold) }} ({{ "{:+.2f}".format(vs_hold_pct) }}%)
           </div>
         </div>
       </div>

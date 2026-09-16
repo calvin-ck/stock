@@ -148,8 +148,12 @@ def _resolve_query_range(end_date_str: str, start_date_str: str, period_str: str
     [start_date, end_date] 범위와 적용된 기간(일)을 계산한다. **시작일이 주어지면 그것을
     우선**해 기간을 역산하고, 아니면 기간(또는 기본값)으로 시작일을 역산한다.
     """
-    end_date = datetime.strptime(end_date_str, "%Y-%m-%d") if end_date_str else datetime.now()
-    end_date = min(end_date, datetime.now())  # 미래 날짜는 오늘로 clamp
+    # 시각(시:분:초)까지 들어가면 기간 계산의 경계일이 요청 시각에 따라 하루씩 밀릴 수
+    # 있으므로(예: 히트맵이 내부에서 쓴 "오늘"과, 그 결과 링크를 다시 열었을 때 파싱되는
+    # "오늘"이 달라짐), 자정으로 정규화해 날짜 단위로만 계산한다.
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    end_date = datetime.strptime(end_date_str, "%Y-%m-%d") if end_date_str else today
+    end_date = min(end_date, today)  # 미래 날짜는 오늘로 clamp
 
     if start_date_str:
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
@@ -575,7 +579,9 @@ def grid_trade():
         "first_price": None,
         "initial_asset": None,
         "hold_only_asset": None,
+        "hold_only_pct": None,
         "vs_hold": None,
+        "vs_hold_pct": None,
         "profit": None,
         "profit_pct": None,
         "applied_period": None,
@@ -665,11 +671,16 @@ def grid_trade():
 
             vs_hold = result["total"] - hold_only_asset  # 그리드 매매 vs 단순 보유 차이
 
+            hold_only_pct = ((hold_only_asset - initial_asset) / initial_asset * 100) if initial_asset else 0.0
+            vs_hold_pct = (vs_hold / hold_only_asset * 100) if hold_only_asset else 0.0
+
             context["summary"] = result
             context["first_price"] = first_price
             context["initial_asset"] = initial_asset
             context["hold_only_asset"] = hold_only_asset
+            context["hold_only_pct"] = hold_only_pct
             context["vs_hold"] = vs_hold
+            context["vs_hold_pct"] = vs_hold_pct
             context["profit"] = profit
             context["profit_pct"] = profit_pct
             context["trade_log"] = trade_log
@@ -732,7 +743,9 @@ def profit_recovery():
         "first_price": None,
         "initial_asset": None,
         "hold_only_asset": None,
+        "hold_only_pct": None,
         "vs_hold": None,
+        "vs_hold_pct": None,
         "profit": None,
         "profit_pct": None,
         "applied_period": None,
@@ -819,11 +832,16 @@ def profit_recovery():
             profit_pct = (profit / initial_asset * 100) if initial_asset else 0.0
             vs_hold = result["total"] - hold_only_asset  # 이익회수 vs 단순 보유 차이
 
+            hold_only_pct = ((hold_only_asset - initial_asset) / initial_asset * 100) if initial_asset else 0.0
+            vs_hold_pct = (vs_hold / hold_only_asset * 100) if hold_only_asset else 0.0
+
             context["summary"] = result
             context["first_price"] = first_price
             context["initial_asset"] = initial_asset
             context["hold_only_asset"] = hold_only_asset
+            context["hold_only_pct"] = hold_only_pct
             context["vs_hold"] = vs_hold
+            context["vs_hold_pct"] = vs_hold_pct
             context["profit"] = profit
             context["profit_pct"] = profit_pct
             context["recover_log"] = recover_log
@@ -897,7 +915,9 @@ def daily_reversal():
         "first_price": None,
         "initial_asset": None,
         "hold_only_asset": None,
+        "hold_only_pct": None,
         "vs_hold": None,
+        "vs_hold_pct": None,
         "profit": None,
         "profit_pct": None,
         "applied_period": None,
@@ -977,11 +997,16 @@ def daily_reversal():
 
             vs_hold = result["total"] - hold_only_asset
 
+            hold_only_pct = ((hold_only_asset - initial_asset) / initial_asset * 100) if initial_asset else 0.0
+            vs_hold_pct = (vs_hold / hold_only_asset * 100) if hold_only_asset else 0.0
+
             context["summary"] = result
             context["first_price"] = first_price
             context["initial_asset"] = initial_asset
             context["hold_only_asset"] = hold_only_asset
+            context["hold_only_pct"] = hold_only_pct
             context["vs_hold"] = vs_hold
+            context["vs_hold_pct"] = vs_hold_pct
             context["profit"] = profit
             context["profit_pct"] = profit_pct
             context["trade_log"] = trade_log
@@ -1044,7 +1069,9 @@ def daily_gap():
         "first_price": None,
         "initial_asset": None,
         "hold_only_asset": None,
+        "hold_only_pct": None,
         "vs_hold": None,
+        "vs_hold_pct": None,
         "profit": None,
         "profit_pct": None,
         "applied_period": None,
@@ -1122,11 +1149,16 @@ def daily_gap():
 
             vs_hold = result["total"] - hold_only_asset
 
+            hold_only_pct = ((hold_only_asset - initial_asset) / initial_asset * 100) if initial_asset else 0.0
+            vs_hold_pct = (vs_hold / hold_only_asset * 100) if hold_only_asset else 0.0
+
             context["summary"] = result
             context["first_price"] = first_price
             context["initial_asset"] = initial_asset
             context["hold_only_asset"] = hold_only_asset
+            context["hold_only_pct"] = hold_only_pct
             context["vs_hold"] = vs_hold
+            context["vs_hold_pct"] = vs_hold_pct
             context["profit"] = profit
             context["profit_pct"] = profit_pct
             context["trade_log"] = trade_log
@@ -1202,7 +1234,9 @@ def daily_reference():
         "first_price": None,
         "initial_asset": None,
         "hold_only_asset": None,
+        "hold_only_pct": None,
         "vs_hold": None,
+        "vs_hold_pct": None,
         "profit": None,
         "profit_pct": None,
         "applied_period": None,
@@ -1282,11 +1316,16 @@ def daily_reference():
 
             vs_hold = result["total"] - hold_only_asset
 
+            hold_only_pct = ((hold_only_asset - initial_asset) / initial_asset * 100) if initial_asset else 0.0
+            vs_hold_pct = (vs_hold / hold_only_asset * 100) if hold_only_asset else 0.0
+
             context["summary"] = result
             context["first_price"] = first_price
             context["initial_asset"] = initial_asset
             context["hold_only_asset"] = hold_only_asset
+            context["hold_only_pct"] = hold_only_pct
             context["vs_hold"] = vs_hold
+            context["vs_hold_pct"] = vs_hold_pct
             context["profit"] = profit
             context["profit_pct"] = profit_pct
             context["trade_log"] = trade_log
@@ -1352,7 +1391,9 @@ def capital_recovery():
         "first_price": None,
         "initial_asset": None,
         "hold_only_asset": None,
+        "hold_only_pct": None,
         "vs_hold": None,
+        "vs_hold_pct": None,
         "profit": None,
         "profit_pct": None,
         "applied_period": None,
@@ -1432,13 +1473,18 @@ def capital_recovery():
             profit_pct = (profit / initial_asset * 100) if initial_asset else 0.0
             vs_hold = result["total"] - hold_only_asset
 
+            hold_only_pct = ((hold_only_asset - initial_asset) / initial_asset * 100) if initial_asset else 0.0
+            vs_hold_pct = (vs_hold / hold_only_asset * 100) if hold_only_asset else 0.0
+
             context["summary"] = result
             context["first_price"] = first_price
             context["resolved_base_price"] = resolved_base
             context["capital"] = capital
             context["initial_asset"] = initial_asset
             context["hold_only_asset"] = hold_only_asset
+            context["hold_only_pct"] = hold_only_pct
             context["vs_hold"] = vs_hold
+            context["vs_hold_pct"] = vs_hold_pct
             context["profit"] = profit
             context["profit_pct"] = profit_pct
             context["trade_log"] = trade_log
@@ -1463,8 +1509,8 @@ def capital_recovery():
 @app.route("/daily_reversal_heatmap", methods=["GET"])
 def daily_reversal_heatmap():
     """
-    daily_reversal_strategy() 전용 히트맵: 등락폭 gap% 1~50% x 매매수량% 1~50%(둘 다 1%
-    단위, 시작 보유 주식수 대비) 조합의 수익률을 계산해 히트맵으로 보여준다.
+    daily_reversal_strategy() 전용 히트맵: 등락폭 gap%(기본 1~50%) x 매매수량%(기본
+    1~100%, 둘 다 1% 단위, 시작 보유 주식수 대비) 조합의 수익률을 계산해 히트맵으로 보여준다.
     저장된 로컬 CSV만 사용 (네이버 재접속 없음).
     """
     codes = _list_local_codes()
@@ -1481,7 +1527,7 @@ def daily_reversal_heatmap():
     gap_pct_min = request.args.get("gap_pct_min", "1").strip()
     gap_pct_max = request.args.get("gap_pct_max", "50").strip()
     qty_pct_min = request.args.get("qty_pct_min", "1").strip()
-    qty_pct_max = request.args.get("qty_pct_max", "50").strip()
+    qty_pct_max = request.args.get("qty_pct_max", "100").strip()
 
     context = {
         "active": "daily_reversal_heatmap",
@@ -1616,7 +1662,7 @@ def daily_reversal_heatmap():
 def daily_gap_heatmap():
     """
     "상승 매도 하락 매수 - min,max 기준"(daily_gap_strategy()) 전용 히트맵: 등락폭 gap%
-    1~50% x 매매수량% 1~50%(둘 다 1% 단위, 시작 보유 주식수 대비) = 2,500가지 조합의
+    (기본 1~50%) x 매매수량%(기본 1~100%, 둘 다 1% 단위, 시작 보유 주식수 대비) 조합의
     수익률을 계산해 히트맵으로 보여준다.
     """
     codes = _list_local_codes()
@@ -1633,7 +1679,7 @@ def daily_gap_heatmap():
     gap_pct_min = request.args.get("gap_pct_min", "1").strip()
     gap_pct_max = request.args.get("gap_pct_max", "50").strip()
     qty_pct_min = request.args.get("qty_pct_min", "1").strip()
-    qty_pct_max = request.args.get("qty_pct_max", "50").strip()
+    qty_pct_max = request.args.get("qty_pct_max", "100").strip()
 
     context = {
         "active": "daily_gap_heatmap",
@@ -1761,7 +1807,7 @@ def daily_gap_heatmap():
 def daily_reference_heatmap():
     """
     "상승 매도 하락 매수 - 매매시 기준"(daily_reference_strategy()) 전용 히트맵: 등락폭
-    gap% 1~50% x 매매수량% 1~50%(둘 다 1% 단위, 시작 보유 주식수 대비) = 2,500가지
+    gap%(기본 1~50%) x 매매수량%(기본 1~100%, 둘 다 1% 단위, 시작 보유 주식수 대비)
     조합의 수익률을 계산해 히트맵으로 보여준다.
     """
     codes = _list_local_codes()
@@ -1780,7 +1826,7 @@ def daily_reference_heatmap():
     gap_pct_min = request.args.get("gap_pct_min", "1").strip()
     gap_pct_max = request.args.get("gap_pct_max", "50").strip()
     qty_pct_min = request.args.get("qty_pct_min", "1").strip()
-    qty_pct_max = request.args.get("qty_pct_max", "50").strip()
+    qty_pct_max = request.args.get("qty_pct_max", "100").strip()
 
     context = {
         "active": "daily_reference_heatmap",
@@ -2060,8 +2106,8 @@ def capital_recovery_heatmap():
 @app.route("/grid_trade_heatmap", methods=["GET"])
 def grid_trade_heatmap():
     """
-    /grid_trade(하락 매도 상승 매수(익절), 이익 회수 없음) 전용 히트맵. gap 1~50%(1% 단위) x
-    매매수량(시작 보유 주식수 대비 %) 1~50%(1% 단위) = 2,500가지 조합의 수익률을 계산해
+    /grid_trade(하락 매도 상승 매수(익절), 이익 회수 없음) 전용 히트맵. gap(기본 1~50%,
+    1% 단위) x 매매수량(시작 보유 주식수 대비 %, 기본 1~100%, 1% 단위) 조합의 수익률을 계산해
     히트맵으로 보여준다. compute_profit_heatmap()은 애초에 이익 회수와 무관하게 동작하므로
     /heatmap과 완전히 같은 계산을 쓰고, 셀/순위 링크만 /grid로 연결한다. 저장된 로컬 CSV만
     사용 (네이버 재접속 없음).
@@ -2082,7 +2128,7 @@ def grid_trade_heatmap():
     gap_min = request.args.get("gap_min", "1").strip()
     gap_max = request.args.get("gap_max", "50").strip()
     qty_pct_min = request.args.get("qty_pct_min", "1").strip()
-    qty_pct_max = request.args.get("qty_pct_max", "50").strip()
+    qty_pct_max = request.args.get("qty_pct_max", "100").strip()
 
     context = {
         "active": "grid_trade_heatmap",
@@ -2709,6 +2755,24 @@ def best_heatmap():
                 if hold is not None:
                     vmax = max(vmax, abs(hold["profit_pct"]))
 
+            # 단순보유 대비(%) 값들을 먼저 모아, 그 색상 스케일(vmax_vs)을 수익률과
+            # 따로 구한다 — 수익률은 양수인데 단순보유 대비는 음수인 경우처럼 두 값의
+            # 부호가 다를 수 있어 색을 공유하면 안 된다.
+            vs_hold_by_period = {}
+            vmax_vs = 1e-9
+            for period in periods:
+                best_by_strategy = best_by_period.get(period)
+                hold = hold_by_period.get(period)
+                if best_by_strategy is None or hold is None or not hold["total"]:
+                    vs_hold_by_period[period] = {}
+                    continue
+                vs_map = {}
+                for strat_key, b in best_by_strategy.items():
+                    vs_pct = (b["total"] - hold["total"]) / hold["total"] * 100
+                    vs_map[strat_key] = vs_pct
+                    vmax_vs = max(vmax_vs, abs(vs_pct))
+                vs_hold_by_period[period] = vs_map
+
             rows = []
             for strat_key, icon, label in _BEST_STRATEGIES:
                 cells = []
@@ -2717,21 +2781,20 @@ def best_heatmap():
                     if best_by_strategy is None:
                         cells.append({
                             "period": period, "profit_pct": None, "total": None,
-                            "color": "#e5e7eb", "link": None,
+                            "color": "#e5e7eb", "vs_hold_color": "#e5e7eb", "link": None,
                         })
                         continue
                     b = best_by_strategy[strat_key]
-                    hold = hold_by_period.get(period)
-                    vs_hold_pct = (
-                        (b["total"] - hold["total"]) / hold["total"] * 100
-                        if hold is not None and hold["total"] else None
-                    )
+                    vs_hold_pct = vs_hold_by_period.get(period, {}).get(strat_key)
                     cells.append({
                         "period": period,
                         "profit_pct": b["profit_pct"],
                         "total": b["total"],
                         "vs_hold_pct": vs_hold_pct,
                         "color": _profit_color(b["profit_pct"], vmax),
+                        "vs_hold_color": (
+                            _profit_color(vs_hold_pct, vmax_vs) if vs_hold_pct is not None else "#e5e7eb"
+                        ),
                         "link": _strategy_detail_link(strat_key, b, code, init_i, end_date_iso, period),
                     })
                 rows.append({"key": strat_key, "icon": icon, "label": label, "cells": cells})
@@ -2748,13 +2811,18 @@ def best_heatmap():
             for period in periods:
                 hold = hold_by_period.get(period)
                 if hold is None:
-                    hold_cells.append({"period": period, "profit_pct": None, "total": None, "color": "#e5e7eb"})
+                    hold_cells.append({
+                        "period": period, "profit_pct": None, "total": None,
+                        "color": "#e5e7eb", "vs_hold_pct": None, "vs_hold_color": "#e5e7eb",
+                    })
                     continue
                 hold_cells.append({
                     "period": period,
                     "profit_pct": hold["profit_pct"],
                     "total": hold["total"],
+                    "vs_hold_pct": 0.0,
                     "color": _profit_color(hold["profit_pct"], vmax),
+                    "vs_hold_color": _profit_color(0.0, vmax_vs),
                 })
 
             context["rows"] = rows
@@ -2770,10 +2838,9 @@ def best_heatmap():
 
 def _compute_full_sweep_grids(df, init_i, max_n=100):
     """
-    6개 전략을 각각 스윕 상한 1~max_n(gap/수량/트리거 축) 전체로 한 번씩 계산해서,
-    전략 key -> {"grid": [[profit_pct, ...], ...], "initial_asset": float} 를 반환한다.
-    grid[i][j]의 축1 값은 i+1, 축2 값은 j+1이다. profit_recovery(회수율)와
-    capital_recovery(매매율)는 축2가 스윕 상한과 무관하게 항상 1~100 전체다.
+    6개 전략을 각각 축1(gap/profit_gap/gap_pct)·축2(qty_pct/회수율/매매율) 1~max_n
+    전체로 한 번씩 계산해서, 전략 key -> {"grid": [[profit_pct, ...], ...],
+    "initial_asset": float} 를 반환한다. grid[i][j]의 축1 값은 i+1, 축2 값은 j+1이다.
     """
     axis_full = range(1, max_n + 1)
     full_100 = range(1, 101)
@@ -2795,38 +2862,20 @@ def _compute_full_sweep_grids(df, init_i, max_n=100):
     }
 
 
-# 전략별로 두 번째 축(qty_pct/회수율 등)이 스윕 상한과 무관하게 항상 1~100 전체인지
-# (True) 아니면 스윕 상한만큼만 보는지(False, 즉 축1과 동일 범위)를 나타낸다.
-_STRATEGY_AXIS2_ALWAYS_FULL = {
-    "grid_trade": False,
-    "profit_recovery": True,
-    "capital_recovery": True,
-    "daily_reversal": False,
-    "daily_gap": False,
-    "daily_reference": False,
-}
-
-
-def _prefix_best_by_n(grid, max_n, axis2_always_full):
+def _best_axis1_at_axis2(grid, axis2_value):
     """
-    grid[i][j](0-indexed, 축값은 i+1/j+1)에서 N=1..max_n 각각에 대해 "축1은 1~N,
-    축2는 always_full이면 1~100 전체, 아니면 1~N"으로 제한했을 때의 최댓값과 그
-    (축1값, 축2값)을 [(profit_pct, axis1, axis2), ...] 리스트(인덱스 0 = N=1)로 반환한다.
+    grid[i][j](0-indexed, 축값은 i+1/j+1)에서 축2(qty_pct/회수율/매매율 등)를
+    axis2_value로 고정하고 축1(gap류)을 1~100 전체로 스윕했을 때의 최댓값과 그
+    축1 값을 (profit_pct, axis1) 튜플로 반환한다.
     """
-    results = []
-    col_full = len(grid[0]) if grid else 0
-    for n in range(1, max_n + 1):
-        col_n = col_full if axis2_always_full else n
-        best_val = float("-inf")
-        best_i = best_j = 0
-        for i in range(n):
-            row = grid[i]
-            for j in range(col_n):
-                v = row[j]
-                if v > best_val:
-                    best_val, best_i, best_j = v, i, j
-        results.append((best_val, best_i + 1, best_j + 1))
-    return results
+    col = axis2_value - 1
+    best_val = float("-inf")
+    best_i = 0
+    for i, row in enumerate(grid):
+        v = row[col]
+        if v > best_val:
+            best_val, best_i = v, i
+    return best_val, best_i + 1
 
 
 _BEST_SWEEP_VALUES = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -2835,12 +2884,13 @@ _BEST_SWEEP_VALUES = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 @app.route("/best_sweep_heatmap", methods=["GET"])
 def best_sweep_heatmap():
     """
-    6개 전략 × 스윕 상한(%) 11개 지점(1, 10, 20, ..., 100)의 최고 수익률을 한 번에
-    비교하는 히트맵. 스윕 상한 N에서의 최고 수익률은 "gap/수량/트리거 축을 1~N까지만
-    스윕했을 때"의 최고값과 같다는 점을 이용해, 전략마다 1~100 전체를 한 번만 계산한
-    뒤 그 안에서 표시할 N들의 부분 최댓값(prefix max)만 뽑아 쓴다(전략마다 다시
-    계산하지 않는다). 각 칸을 클릭하면 그 조합 그대로 해당 전략의 실제 백테스트
-    페이지로 이동한다.
+    6개 전략 × 수량류 축(qty_pct/회수율/매매율) 11개 지점(1, 10, 20, ..., 100%)의
+    최고 수익률을 한 번에 비교하는 히트맵. 각 칸은 그 수량값을 고정하고 gap류 축을
+    1~100% 전체로 스윕했을 때 나오는 최고 수익률이다("그 수량에서 gap을 최적으로
+    골랐을 때 최선의 결과"). 전략마다 1~100×1~100 전체 그리드를 한 번만 계산한 뒤,
+    표시할 11개 수량값에 해당하는 열(column)에서만 최댓값을 뽑아 쓴다(전략당 다시
+    계산하지 않는다). 각 칸을 클릭하면 그 수량값과 그때의 최적 gap 조합 그대로 해당
+    전략의 실제 백테스트 페이지로 이동한다.
     """
     codes = _list_local_codes()
     default_code = max(codes, key=lambda c: c["max_date"])["code"] if codes else ""
@@ -2898,21 +2948,19 @@ def best_sweep_heatmap():
             full_by_strategy = _compute_full_sweep_grids(df, init_i, max_n=100)
 
             vmax = max(1e-9, abs(hold_profit_pct))
-            prefix_by_strategy = {}
+            best_by_strategy = {}
             for strat_key, icon, label in _BEST_STRATEGIES:
                 full = full_by_strategy[strat_key]
-                axis2_always_full = _STRATEGY_AXIS2_ALWAYS_FULL[strat_key]
-                prefix = _prefix_best_by_n(full["grid"], 100, axis2_always_full)
-                prefix_by_strategy[strat_key] = (prefix, full["initial_asset"])
-                for profit_pct, _, _ in prefix:
+                best_by_n = [_best_axis1_at_axis2(full["grid"], n) for n in context["sweep_values"]]
+                best_by_strategy[strat_key] = (best_by_n, full["initial_asset"])
+                for profit_pct, _ in best_by_n:
                     vmax = max(vmax, abs(profit_pct))
 
             rows = []
             for strat_key, icon, label in _BEST_STRATEGIES:
-                prefix, strat_initial_asset = prefix_by_strategy[strat_key]
+                best_by_n, strat_initial_asset = best_by_strategy[strat_key]
                 cells = []
-                for n in context["sweep_values"]:
-                    profit_pct, axis1, axis2 = prefix[n - 1]
+                for n, (profit_pct, best_axis1) in zip(context["sweep_values"], best_by_n):
                     total = strat_initial_asset * (1 + profit_pct / 100)
                     cells.append({
                         "n": n,
@@ -2920,7 +2968,7 @@ def best_sweep_heatmap():
                         "total": total,
                         "color": _profit_color(profit_pct, vmax),
                         "link": _strategy_link_from_axes(
-                            strat_key, axis1, axis2, code, init_i, end_date_iso, applied_period,
+                            strat_key, best_axis1, n, code, init_i, end_date_iso, applied_period,
                         ),
                     })
                 rows.append({"key": strat_key, "icon": icon, "label": label, "cells": cells})
