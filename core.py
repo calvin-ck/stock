@@ -9,15 +9,11 @@ core.py — 네이버 금융에서 특정 종목의 일별 시세를 가져오�
 """
 
 import sys
-import re
-import time
 import argparse
-from io import StringIO
 from datetime import datetime, timedelta
 
 import requests
 import pandas as pd
-from bs4 import BeautifulSoup
 
 HEADERS = {
     "User-Agent": (
@@ -27,118 +23,18 @@ HEADERS = {
     )
 }
 
-SISE_DAY_URL = "https://finance.naver.com/item/sise_day.naver"
-MAIN_URL = "https://finance.naver.com/item/main.naver"
-
-
-def _decode_response(resp: requests.Response) -> str:
-    """
-    페이지의 실제 charset을 감지해서 디코딩한다.
-    네이버 페이지는 종목/ETF에 따라 euc-kr, utf-8이 섞여 있어서
-    인코딩을 하드코딩하면 한글이 깨질 수 있다 (mojibake).
-    """
-    raw = resp.content
-    m = re.search(rb'charset=["\']?([\w-]+)', raw[:2000], re.IGNORECASE)
-    encoding = m.group(1).decode("ascii").lower() if m else "euc-kr"
-    try:
-        return raw.decode(encoding)
-    except (LookupError, UnicodeDecodeError):
-        # 감지된 인코딩으로 실패하면 다른 인코딩으로 재시도
-        for fallback in ("utf-8", "euc-kr", "cp949"):
-            try:
-                return raw.decode(fallback)
-            except UnicodeDecodeError:
-                continue
-        return raw.decode("utf-8", errors="replace")
-
-
-def fetch_page(code: str, page: int) -> pd.DataFrame:
-    """
-    네이버 금융 일별시세 페이지 1개를 가져와 DataFrame으로 반환.
-
-    전일비 컬럼은 상승/하락을 이미지 아이콘(alt='상승'/'하락')으로 표시하는데,
-    pd.read_html은 이미지의 alt 텍스트를 읽지 못해 부호가 소실되거나 NaN이 될 수 있다.
-    이를 피하기 위해 BeautifulSoup으로 각 셀을 직접 파싱한다.
-    """
-    resp = requests.get(
-        SISE_DAY_URL,
-        params={"code": code, "page": page},
-        headers=HEADERS,
-        timeout=5,
-    )
-    resp.raise_for_status()
-    text = _decode_response(resp)
-
-    soup = BeautifulSoup(text, "lxml")
-    table = soup.select_one("table.type2") or soup.find("table")
-    if table is None:
-        return pd.DataFrame()
-
-    rows = []
-    for tr in table.find_all("tr"):
-        tds = tr.find_all("td")
-        if len(tds) != 7:
-            continue  # 헤더/구분용 빈 행 건너뜀
-
-        date_text = tds[0].get_text(strip=True)
-        if not date_text:
-            continue  # 날짜 없는 빈 행(스페이서) 건너뜀
-
-        change_cell = tds[2]
-        change_text = change_cell.get_text(strip=True)
-        img = change_cell.find("img")
-        alt = (img.get("alt") if img else "") or ""
-
-        rows.append({
-            "날짜": date_text,
-            "종가": tds[1].get_text(strip=True),
-            "전일비": change_text,
-            "전일비_방향": alt,  # '상승' / '하락' / '보합'
-            "시가": tds[3].get_text(strip=True),
-            "고가": tds[4].get_text(strip=True),
-            "저가": tds[5].get_text(strip=True),
-            "거래량": tds[6].get_text(strip=True),
-        })
-
-    return pd.DataFrame(rows)
+# 구 finance.naver.com/item/* HTML 스크래핑 방식은 2026년 9월경 폐지되어(sise_day.naver 등이
+# 항상 HTTP 410 반환) Npay 증권(stock.naver.com)이 쓰는 내부 JSON API로 교체했다.
+CHART_DAY_URL = "https://api.stock.naver.com/chart/domestic/item/{code}/day"
+STOCK_BASIC_URL = "https://m.stock.naver.com/api/stock/{code}/basic"
 
 
 def get_stock_name(code: str) -> str:
-    """종목명 조회 (메인 페이지 title 태그 파싱)."""
-    resp = requests.get(MAIN_URL, params={"code": code}, headers=HEADERS, timeout=5)
+    """종목명 조회."""
+    resp = requests.get(STOCK_BASIC_URL.format(code=code), headers=HEADERS, timeout=5)
     resp.raise_for_status()
-    text = _decode_response(resp)
-    m = re.search(r"<title>(.*?)</title>", text)
-    if m:
-        return m.group(1).replace(":네이버 증권", "").strip()
-    return code
-
-
-def _parse_change_column(text_series: pd.Series, direction_series: pd.Series) -> pd.Series:
-    """
-    '전일비' 숫자 텍스트와 '전일비_방향'(alt: 상승/하락/보합)을 조합해
-    부호 있는 숫자로 변환한다.
-    """
-
-    def parse_one(text_val, direction_val):
-        if pd.isna(text_val):
-            return None
-        s = str(text_val)
-        m = re.search(r"[\d,]+(?:\.\d+)?", s)
-        if not m:
-            return None
-        num = float(m.group(0).replace(",", ""))
-
-        direction = str(direction_val) if not pd.isna(direction_val) else ""
-        # alt 속성으로 우선 판단, 없으면 원본 텍스트 안에 방향 표시가 섞여 있는지로 판단
-        if ("하락" in direction) or ("하락" in s) or ("↓" in s) or ("▼" in s):
-            num = -num
-        return num
-
-    return pd.Series(
-        [parse_one(t, d) for t, d in zip(text_series, direction_series)],
-        index=text_series.index,
-    )
+    data = resp.json()
+    return data.get("stockName") or code
 
 
 def get_stock_data_range(
@@ -147,10 +43,10 @@ def get_stock_data_range(
     """
     start_date ~ end_date(포함, 기본 오늘)까지의 일별 시세를 가져온다.
 
-    네이버 일별시세 페이지는 조회 시점과 무관하게 항상 "오늘까지의 전체 이력"을 최신순으로
-    페이징해서 보여준다 — 즉 특정 과거 날짜의 시세는 언제 조회하든 항상 같은 값이다. 그래서
-    end_date가 오늘보다 과거라도 그날 이후 데이터가 섞여 들어오는 것을 막을 방법은 없고(항상
-    page 1=오늘 근처부터 시작), 대신 다 받은 뒤 [start_date, end_date] 범위로 걸러낸다.
+    과거 날짜의 시세는 언제 조회하든 항상 같은 값이라, 캐시에 이미 있는 구간은 다시 받을
+    필요가 없다(호출부인 app.py의 _ensure_range_df 참고). 전일비(종가-전일종가)는 API가
+    직접 주지 않아 종가 diff로 직접 계산하는데, start_date 당일의 전일비도 정확히 구하기
+    위해 실제 요청 구간보다 앞쪽으로 여유를 두고 받은 뒤 [start_date, end_date]로 잘라낸다.
 
     Parameters
     ----------
@@ -161,7 +57,7 @@ def get_stock_data_range(
     end_date : datetime, optional
         가져올 가장 최근 날짜(포함). 비우면 오늘.
     sleep : float
-        페이지 요청 사이 대기 시간 (과도한 요청 방지용)
+        미사용(과거 페이지네이션 방식의 잔재, 호환을 위해 시그니처만 유지).
 
     Returns
     -------
@@ -169,41 +65,36 @@ def get_stock_data_range(
         최신 날짜가 맨 위로 정렬됨.
     """
     end_date = end_date or datetime.now()
+    # 휴장일(주말·연휴)을 감안해 전일비 계산용 여유분을 넉넉히 둔다.
+    fetch_start = start_date - timedelta(days=15)
 
-    all_rows = []
-    page = 1
-    max_pages = 500  # 무한루프 방지용 안전장치
-
-    while page <= max_pages:
-        df = fetch_page(code, page)
-        if df.empty:
-            break
-
-        df["날짜"] = pd.to_datetime(df["날짜"], format="%Y.%m.%d")
-        all_rows.append(df)
-
-        oldest_in_page = df["날짜"].min()
-        if oldest_in_page <= start_date:
-            break
-
-        page += 1
-        time.sleep(sleep)
-
-    if not all_rows:
+    resp = requests.get(
+        CHART_DAY_URL.format(code=code),
+        params={
+            "startDateTime": fetch_start.strftime("%Y%m%d"),
+            "endDateTime": end_date.strftime("%Y%m%d"),
+        },
+        headers=HEADERS,
+        timeout=5,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if not data:
         return pd.DataFrame()
 
-    result = pd.concat(all_rows, ignore_index=True)
+    result = pd.DataFrame(data)
+    result["날짜"] = pd.to_datetime(result["localDate"], format="%Y%m%d")
+    result = result.drop_duplicates(subset="날짜").sort_values("날짜").reset_index(drop=True)
+    result = result.rename(columns={
+        "openPrice": "시가",
+        "closePrice": "종가",
+        "highPrice": "고가",
+        "lowPrice": "저가",
+        "accumulatedTradingVolume": "거래량",
+    })
+    result["전일비"] = result["종가"].diff()
     result = result[(result["날짜"] >= start_date) & (result["날짜"] <= end_date)]
-    result = result.drop_duplicates(subset="날짜")
     result = result.sort_values("날짜", ascending=False).reset_index(drop=True)
-
-    for col in ["종가", "시가", "고가", "저가", "거래량"]:
-        result[col] = pd.to_numeric(
-            result[col].astype(str).str.replace(",", "", regex=False),
-            errors="coerce",
-        )
-    result["전일비"] = _parse_change_column(result["전일비"], result["전일비_방향"])
-    result = result.drop(columns=["전일비_방향"])
     result = result[["날짜", "시가", "종가", "전일비", "고가", "저가", "거래량"]]
 
     return result
@@ -220,7 +111,7 @@ def get_stock_data(code: str, days: int, sleep: float = 0.2) -> pd.DataFrame:
     days : int
         오늘부터 몇 일 전까지 데이터를 가져올지
     sleep : float
-        페이지 요청 사이 대기 시간 (과도한 요청 방지용)
+        미사용(과거 페이지네이션 방식의 잔재, 호환을 위해 시그니처만 유지).
 
     Returns
     -------

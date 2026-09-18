@@ -23,7 +23,6 @@ from core import (
     capital_recovery_strategy, compute_capital_recovery_heatmap,
     compute_profit_heatmap, compute_profit_recovery_heatmap,
     compute_price_stats,
-    SISE_DAY_URL,
 )
 
 app = Flask(__name__)
@@ -37,9 +36,9 @@ MAX_RETENTION_DAYS = 730  # 로컬 캐시 최대 보관 기간 (2년) — 이보
 DEFAULT_PERIOD_DAYS = 30  # 종료일만 있고 시작일/기간이 둘 다 없을 때 기본 조회 기간
 
 
-def _first_page_url(code: str) -> str:
-    """데이터를 가져오는 첫 번째 요청 URL (page=1)을 만들어 반환."""
-    return f"{SISE_DAY_URL}?{urlencode({'code': code, 'page': 1})}"
+def _stock_page_url(code: str) -> str:
+    """이 종목의 네이버 증권(Npay 증권) 시세 페이지 URL을 만들어 반환."""
+    return f"https://stock.naver.com/domestic/stock/{code}/price"
 
 
 def _local_csv_path(code: str) -> str:
@@ -452,7 +451,7 @@ def index():
         try:
             start_date, end_date, _ = _resolve_query_range(end_date_str, start_date_str, period_str)
 
-            context["source_url"] = _first_page_url(code)
+            context["source_url"] = _stock_page_url(code)
 
             try:
                 context["name"] = get_stock_name(code)
